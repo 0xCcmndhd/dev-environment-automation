@@ -268,24 +268,120 @@ configure_starship() {
     mkdir -p "$STARSHIP_CONFIG_DIR"
     cat > "$STARSHIP_CONFIG" << 'EOF'
 # Starship prompt configuration
+# Don't print a new line at the start of the prompt
 add_newline = false
-format = """
-$username\
-$directory\
-$git_branch\
-$git_status\
-$nodejs\
-$python\
-$rust\
-$docker_context\
-$kubernetes\
-$time\
-$cmd_duration\
-$character"""
 
+# Prompt format
+format = """$all$character"""
+
+# Use a custom prompt character
 [character]
 success_symbol = "[➜](bold green) "
-error_symbol = "[✗](bold red) "
+error_symbol = "[➜](bold red) "
+
+# Directory module
+[directory]
+truncation_length = 3
+truncation_symbol = "…/"
+home_symbol = "~"
+
+# Git status module
+[git_status]
+conflicted = "⚔️ "
+ahead = "⇡${count}"
+behind = "⇣${count}"
+staged = "[+${count}](green)"
+modified = "[~${count}](red)"
+untracked = "[?${count}](yellow)"
+deleted = "🗑️ "
+renamed = "➡️ "
+style = "bold yellow"
+
+# Git branch module
+[git_branch]
+symbol = "🌱 "
+
+# Node.js module
+[nodejs]
+format = "via [🌐 v${version}]($style) "
+
+# Python module
+[python]
+format = "via [🐍 v${version}]($style) "
+
+# Rust module
+[rust]
+format = "via [🦀 v${version}]($style) "
+
+# Package module
+[package]
+format = "[$symbol$version]($style) "
+symbol = "📦 "
+
+# Battery status module
+[battery]
+full_symbol = "🔋 "
+charging_symbol = "⚡️ "
+discharging_symbol = "🔌 "
+display = [
+    { threshold = 10, style = "bold red" },
+    { threshold = 30, style = "bold yellow" },
+    { style = "bold green" }
+]
+
+# Time module
+[time]
+disabled = false
+format = "at [🕙 $time]($style) "
+time_format = "%H:%M"
+style = "bold dimmed white"
+
+# Command duration module
+[cmd_duration]
+min_time = 2000
+format = "took [$duration]($style) "
+style = "bold yellow"
+
+# Memory usage
+[memory_usage]
+disabled = false
+threshold = -1
+symbol = "🗃️ "
+style = "bold dimmed white"
+format = "$symbol[${ram}( | ${swap})]($style) "
+
+# Shell indicator
+[shell]
+fish_indicator = "🐟"
+powershell_indicator = "_"
+unknown_indicator = "mystery shell"
+style = "cyan bold"
+disabled = false
+
+# AWS Profile
+[aws]
+symbol = "🅰 "
+format = 'on [$symbol($profile )(\($region\) )]($style)'
+style = "bold yellow"
+disabled = false
+
+# Custom module example (e.g., Kubernetes context)
+[custom.k8s]
+command = "kubectl config current-context"
+when = "command -v kubectl > /dev/null"
+format = "on [⎈ $output](bold blue) "
+
+# Disable unused modules
+[gcloud]
+disabled = true
+[env_var]
+disabled = true
+[hostname]
+disabled = true
+[username]
+disabled = true
+[line_break]
+disabled = true
 EOF
 }
 
