@@ -269,15 +269,16 @@ configure_starship() {
     cat > "$STARSHIP_CONFIG" << 'EOF'
 # Starship prompt configuration
 # Don't print a new line at the start of the prompt
-add_newline = false
+add_newline = true
 
 # Prompt format
 format = """$all$character"""
 
 # Use a custom prompt character
 [character]
-success_symbol = "[➜](bold green) "
-error_symbol = "[➜](bold red) "
+success_symbol = "[❯](purple)"
+error_symbol = "[❯](red)"
+vimcmd_symbol = "[❮](green)"
 
 # Directory module
 [directory]
@@ -332,7 +333,7 @@ display = [
 # Time module
 [time]
 disabled = false
-format = "at [🕙 $time]($style) "
+format = "[$time]($style) "
 time_format = "%H:%M"
 style = "bold dimmed white"
 
@@ -342,21 +343,12 @@ min_time = 2000
 format = "took [$duration]($style) "
 style = "bold yellow"
 
-# Memory usage
-[memory_usage]
-disabled = false
-threshold = -1
-symbol = "🗃️ "
-style = "bold dimmed white"
-format = "$symbol[${ram}( | ${swap})]($style) "
-
 # Shell indicator
 [shell]
-fish_indicator = "🐟"
 powershell_indicator = "_"
 unknown_indicator = "mystery shell"
 style = "cyan bold"
-disabled = false
+disabled = true
 
 # AWS Profile
 [aws]
