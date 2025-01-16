@@ -1,6 +1,11 @@
 #!/bin/bash
 
-# Setup Fish Shell 4.0, Starship, FastFetch, and Pokémon-based system identifiers.
+# Fish Shell 4.0 Setup Script
+# Automates the setup of Fish Shell, Starship Prompt, FastFetch, and JetBrains Mono Nerd Font.
+
+# ⚠️ WARNING: This script will overwrite configuration files.
+# Make sure to back up your existing configurations before running this script.
+# I am not responsible for any data loss, misconfigurations, or issues that may arise.
 
 set -e  # Exit immediately on errors
 
@@ -11,6 +16,43 @@ function info() {
 function error() {
     echo -e "\033[1;31m[ERROR]\033[0m $1"
     exit 1
+}
+
+# Display warning message
+echo -e "\033[1;31m⚠️ WARNING\033[0m"
+echo "This script will overwrite the following configuration files:"
+echo "- ~/.config/fish/config.fish"
+echo "- ~/.config/starship.toml"
+echo "- ~/.config/fastfetch/config.jsonc"
+echo
+echo "Make sure to back up your existing configurations before proceeding."
+echo "I am not responsible for any data loss, misconfigurations, or issues."
+echo
+read -p "Do you want to continue? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Exiting script. No changes were made."
+    exit 1
+fi
+
+# Function to install fortune-mod
+install_fortune() {
+    if ! command -v fortune >/dev/null 2>&1; then
+        info "Installing fortune-mod..."
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get install -y fortune-mod
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y fortune-mod
+        elif command -v pacman >/dev/null 2>&1; then
+            sudo pacman -S --noconfirm fortune-mod
+        elif command -v brew >/dev/null 2>&1; then
+            brew install fortune
+        else
+            error "Unsupported package manager. Please install fortune-mod manually."
+        fi
+    else
+        info "fortune-mod is already installed."
+    fi
 }
 
 # Paths
@@ -203,6 +245,13 @@ function fish_greeting
         pokeget (cat "$HOME/.pokeid") --hide-name | fastfetch --file-raw -
     else
         pokeget random --hide-name | fastfetch --file-raw -
+    end
+
+    # Display a random fortune
+    if command -v fortune >/dev/null 2>&1
+        fortune -s
+    else
+        echo "Install 'fortune-mod' to see random fortunes!"
     end
 
     echo
