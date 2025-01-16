@@ -3,6 +3,15 @@
 
 This script automates the setup of **Fish Shell 4.0**, **Starship Prompt**, **FastFetch**, and **JetBrains Mono Nerd Font**. It also assigns a unique Pokémon identifier to each system for fun and easy identification.
 
+## ⚠️ Warning
+
+**Before running this script, make sure to back up your existing configuration files.** This script will overwrite the following files:
+- `~/.config/fish/config.fish`
+- `~/.config/starship.toml`
+- `~/.config/fastfetch/config.jsonc`
+
+I am **not responsible** for any data loss, misconfigurations, or issues that may arise from running this script. Use it at your own risk.
+
 ## Features
 
 - **Fish Shell 4.0**: Installs the latest Fish Shell with modern features.
