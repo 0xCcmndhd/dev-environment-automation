@@ -1,0 +1,106 @@
+# Glance Configuration Template
+# This file is processed by deploy.sh to generate the final glance.yml.
+
+# A professional, dark theme for the dashboard
+theme:
+  light: false
+  background-color: [225, 20, 12]
+  primary-color: [200, 75, 65]
+  positive-color: [140, 75, 50]
+  negative-color: [355, 85, 65]
+
+pages:
+  - name: Homelab Dashboard
+    columns:
+      - size: small
+        widgets:
+          - type: calendar
+          - type: weather
+            location: ${GLANCE_WEATHER_LOCATION}
+            units: imperial
+          - type: server-stats
+            servers: [{ type: local, name: "Utilities VM Resources" }]
+          - type: dns-stats
+            service: pihole-v6
+            url: http://${PIHOLE_PRIMARY_IP}
+            password: ${PIHOLE_PASSWORD}
+          - type: monitor
+            cache: 1m
+            title: Core Infrastructure
+            sites:
+              - title: Proxmox (via Caddy)
+              url: https://proxmox.${LOCAL_DOMAIN}:8006
+              icon: di:proxmox
+              - title: Proxmox (Direct IP)
+              url: https://${PROXMOX_IP}:8006
+              allow-insecure: true # Important for the direct IP link
+              icon: di:proxmox 
+              - title: UniFi (via Caddy)
+              url: https://unifi.${LOCAL_DOMAIN}
+              icon: di:unifi
+              - title: UniFi (Direct IP)
+              url: https://${UNIFI_IP}
+              allow-insecure: true # Important for the direct IP link
+              icon: di:unifi
+              
+      - size: full
+        widgets:
+          - type: search
+            autofocus: true
+            search-engine: google
+          - type: monitor
+            cache: 1m
+            title: Digital Library Management (*Arr Suite)
+            sites:
+              - { title: Sonarr, url: "https://sonarr.${LOCAL_DOMAIN}", icon: "di:sonarr" }
+              - { title: Radarr, url: "https://radarr.${LOCAL_DOMAIN}", icon: "di:radarr" }
+              - { title: Prowlarr, url: "https://prowlarr.${LOCAL_DOMAIN}", icon: "di:prowlarr" }
+              - { title: Lidarr, url: "https://lidarr.${LOCAL_DOMAIN}", icon: "di:lidarr" }
+              - { title: Readarr, url: "https://readarr.${LOCAL_DOMAIN}", icon: "di:readarr" }
+              - { title: Bazarr, url: "https://bazarr.${LOCAL_DOMAIN}", icon: "di:bazarr" }
+              - { title: qBittorrent, url: "https://qbittorrent.${LOCAL_DOMAIN}", icon: "di:qbittorrent" }
+          - type: monitor
+            cache: 1m
+            title: Media Servers
+            sites:
+              - { title: Plex, url: "http://plex.${LOCAL_DOMAIN}", icon: "di:plex", alt-status-codes: [401, 403] }
+              - { title: Jellyfin, url: "http://jellyfin.${LOCAL_DOMAIN}", icon: "di:jellyfin" }
+              - { title: Calibre-web, url: "https://calibre-web.${LOCAL_DOMAIN}", icon: "di:calibre" }
+          - type: group
+            widgets:
+              - type: rss
+                limit: 5
+                feeds:
+                  - { url: "https://hnrss.org/best", title: "Hacker News - Best" }
+              - type: reddit
+                subreddit: selfhosted
+                limit: 5
+              - type: reddit
+                subreddit: homelab
+                limit: 5
+
+      - size: small
+        widgets:
+          - type: monitor
+            cache: 1m
+            title: AI Service Interfaces
+            sites:
+              - { title: Simple LLM UI, url: "https://open-webui.${LOCAL_DOMAIN}", icon: "custom:openai" }
+              - { title: Power-user LLM UI, url: "https://sillytavern.${LOCAL_DOMAIN}", icon: "custom:sillytavern" }
+              - { title: Ollama API, url: "http://${AI_SERVER_IP}:11434", icon: "di:ollama" }
+          - type: markets
+            symbol-link-template: "https://www.tradingview.com/symbols/{SYMBOL}/"
+            markets:
+              - { symbol: "SPY", name: "S&P 500" }
+              - { symbol: "QQQ", name: "Nasdaq 100" }
+              - { symbol: "BTC-USD", name: "Bitcoin" }
+              - { symbol: "ETH-USD", name: "Ethereum" }
+              - { symbol: "US10Y", name: "10Y Treasury" }
+          - type: releases
+            cache: 1d
+            title: Key Project Releases
+            repositories:
+              - glanceapp/glance
+              - pi-hole/pi-hole
+              - tailscale/tailscale
+              - authelia/authelia
