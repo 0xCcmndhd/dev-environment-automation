@@ -298,17 +298,23 @@ deploy_stack() {
     info "The following services are configured for deployment:"
     docker compose -f docker-compose.yml config --services | sed 's/^/    - /'
     echo ""
-    read -p "Ready to pull images and start the containers? (y/N) " -n 1 -r
+    read -p "Ready to pull updated images and deploy/update the stack? (y/N) " -n 1 -r
     echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        info "Pulling latest images..."
-        docker compose pull
-        info "Starting Docker containers in detached mode..."
-        docker compose up -d
-        success "Stack has been deployed!"
-    else
-        info "Deployment aborted. You can start the stack later with 'docker compose up -d'."
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Deployment aborted."
+        return
     fi
+    
+    info "Pulling the latest versions of all defined images..."
+    # 'pull' will download any new versions of images like 'caddy:latest'
+    docker compose pull
+
+    info "Starting or updating containers in detached mode..."
+    # 'up -d' will automatically stop and re-create any containers whose
+    # configuration or image has changed. It leaves unchanged containers running.
+    docker compose up -d --remove-orphans
+
+    success "Stack has been successfully deployed/updated!"
 }
 
 cleanup_stack() {
