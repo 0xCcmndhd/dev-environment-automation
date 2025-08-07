@@ -16,8 +16,9 @@ proxmox.{$LOCAL_DOMAIN}:8006 {
 }
 
 unifi.{$LOCAL_DOMAIN} {
-    # UniFi runs on port 443 by default
+    # The reverse_proxy directive and its arguments are on one line
     reverse_proxy https://{$UNIFI_IP}:443 {
+        # The transport block is indented within the reverse_proxy
         transport http {
             tls_insecure_skip_verify
         }

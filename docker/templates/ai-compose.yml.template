@@ -1,0 +1,28 @@
+# docker/templates/ai-compose.yml.template
+version: '3.8'
+
+services:
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - openwebui-data:/app/backend/data
+    environment:
+      # We tell WebUI to connect to Ollama running on the host machine.
+      # The IP address comes from our .env file.
+      - OLLAMA_BASE_URL=http://${AI_SERVER_IP}:11434
+      - TZ=${TZ}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  openwebui-data:
+    name: openwebui_data

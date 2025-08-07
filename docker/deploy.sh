@@ -26,49 +26,64 @@ readonly DOCKER_BASE_DIR="$HOME/docker"
 # ==============================================================================
 # PREREQUISITE: DOCKER INSTALLATION & PERMISSIONS
 # ==============================================================================
+# ==============================================================================
+# PREREQUISITE: DOCKER INSTALLATION & PERMISSIONS
+# ==============================================================================
 ensure_docker() {
     # --- Step 1: Check if Docker is installed ---
     if ! command -v docker &> /dev/null; then
-        info "Docker is not found. Starting installation..."
-        
-        # Add the repository and install Docker packages
-        sudo apt-get update
-        sudo apt-get install -y ca-certificates curl
-        sudo install -m 0755 -d /etc/apt/keyrings
-        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-        sudo chmod a+r /etc/apt/keyrings/docker.asc
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-              $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-              sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-        sudo apt-get update
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        info "Docker is not found. Attempting installation for your OS..."
+        if command -v dnf &> /dev/null; then
+            # --- Fedora/Nobara/RHEL Installation ---
+            info "DNF package manager detected (Fedora/Nobara)."
+            sudo dnf -y install dnf-plugins-core
+            sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+            sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        elif command -v apt-get &> /dev/null; then
+            # --- Debian/Ubuntu Installation ---
+            info "APT package manager detected (Debian/Ubuntu)."
+            sudo apt-get update
+            sudo apt-get install -y ca-certificates curl
+            sudo install -m 0755 -d /etc/apt/keyrings
+            sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            sudo chmod a+r /etc/apt/keyrings/docker.asc
+            # Note: The UBUNTU_CODENAME variable is specific to Ubuntu.
+            # This logic needs to be robust for other Debian-based distros if needed.
+            . /etc/os-release
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+                  ${VERSION_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        else
+            error "Unsupported package manager. Please install Docker and Docker Compose manually."
+        fi
+
+        # --- Post-installation steps for all OSes ---
+        info "Enabling and starting the Docker service..."
+        sudo systemctl start docker
+        sudo systemctl enable docker
         success "Docker Engine installed successfully."
     else
         info "Docker is already installed."
     fi
 
-# ... in the ensure_docker function ...
     # --- Step 2: MANDATORY Check for Docker group membership ---
+    # This part is universal and doesn't need to change.
     if ! groups | grep -q '\bdocker\b'; then
         info "Adding current user to the 'docker' group for passwordless access..."
+        # This handles both cases where the script is run with or without sudo
         CURRENT_USER=${SUDO_USER:-$USER}
         sudo usermod -aG docker "$CURRENT_USER"
         
-        # Now, construct the multi-line message as a single variable
-        # The -e interprets the \n as newlines
         MESSAGE_BODY="User '$CURRENT_USER' has been added to the 'docker' group."
-        MESSAGE_INSTRUCTIONS="\n\n!!! IMPORTANT: You must log out and log back in for this change to take effect.\n!!! Please log out, SSH back in, and run this script again to continue."
+        MESSAGE_INSTRUCTIONS="\n\n!!! IMPORTANT: You MUST log out and log back in for this change to take effect.\n!!! Please log out, SSH back in, and run this script again to continue."
         
-        # Use a separate info call for clarity
         info "$MESSAGE_BODY"
-        
-        # Exit with the error and the full instructions
-        error "$MESSAGE_INSTRUCTIONS"
+        error "$MESSAGE_INSTRUCTIONS" # Exits the script
     else
         info "User has correct Docker permissions."
     fi
 }
-
 # ==============================================================================
 # INDIVIDUAL SERVICE DEFINITIONS
 # These are helper functions that append a single service to the compose file.
@@ -196,6 +211,28 @@ generate_glance_config() {
     fi
 }
 
+generate_ai_compose() {
+    # Use the reliable global variable for the template path
+    local TEMPLATE_PATH="$TEMPLATES_DIR/ai-compose.yml.template"
+    local CONFIG_PATH="./docker-compose.yml"
+    
+    if [ ! -f "$TEMPLATE_PATH" ]; then
+        error "AI Compose template not found at '$TEMPLATE_PATH'!"
+        return 1
+    fi
+
+    info "  -> Generating AI stack docker-compose.yml from template..."
+
+    # Source the .env file to load variables, then use envsubst
+    set -a
+    # shellcheck source=.env
+    source .env
+    set +a
+    
+    envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
+    success "   -> AI docker-compose.yml created at $CONFIG_PATH"
+}
+
 # ==============================================================================
 # MAIN COMPOSE FILE GENERATOR
 # This function orchestrates the creation of the final docker-compose.yml.
@@ -233,6 +270,27 @@ configure_env_file_if_needed() {
         # No .env file exists, so we must create one.
         configure_env_file
     fi
+}
+
+prepare_service_directories() {
+    # --- NEW, CRUCIAL FUNCTION ---
+    # This prepares directories and fixes permissions BEFORE any configs are written.
+    local STACK_NAME="$1"
+    shift
+    local SERVICES=("$@")
+
+    info "Preparing and validating configuration directories for '$STACK_NAME'..."
+    
+    local CURRENT_UID=$(id -u)
+    local CURRENT_GID=$(id -g)
+
+    for SERVICE in "${SERVICES[@]}"; do
+        local CONFIG_DIR="./${SERVICE}/config"
+        info "  -> Ensuring directory exists and has correct permissions: $CONFIG_DIR"
+        mkdir -p "$CONFIG_DIR"
+        sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "./${SERVICE}"
+    done
+    success "All service directories prepared."
 }
 
 configure_env_file() {
@@ -352,7 +410,7 @@ main_menu() {
     cat << "EOF"
 =====================================================================
             Homelab Service Deployment Manager
-                by 0xCcmndhd (Your Name)
+                      by 0xCcmndhd
 ---------------------------------------------------------------------
  This script automates the deployment of containerized service stacks.
  It is designed to be idempotent and secure. For more information,
@@ -364,6 +422,7 @@ EOF
     echo ""
     echo "Select a service stack to manage:"
     echo "  1) Utilities (Caddy, Watchtower, Glance, etc.)"
+    echo "  2) AI (Open Webui, Sillytavern)"
     echo ""
     echo "  q) Quit"
     echo ""
@@ -371,6 +430,7 @@ EOF
 
     case "$stack_choice" in
         1) manage_stack "utilities" ;;
+        2) manage_stack "ai" ;;
         q) exit 0 ;;
         *) error "Invalid choice. Please try again." ;;
     esac
@@ -396,6 +456,10 @@ manage_stack() {
             info "Preparing to deploy the '$STACK_NAME' stack..."
             mkdir -p "$DEPLOY_PATH"
             cd "$DEPLOY_PATH" || exit
+            
+            # Step 1: Prepare directories with correct permissions FIRST
+            # This is the line that was missing a function to call.
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower
 
             # Step 1: Configure the .env file FIRST.
             configure_env_file_if_needed
@@ -406,6 +470,8 @@ manage_stack() {
                 generate_utilities_compose
                 generate_caddyfile
                 generate_glance_config # <-- This will now be found
+            elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
+            generate_ai_compose
             else
                 error "Config file generator for stack '$STACK_NAME' is not implemented yet."
             fi
@@ -417,11 +483,15 @@ manage_stack() {
             # --- NEW: CONFIG ONLY MODE ---
             info "Generating config files for '$STACK_NAME' without deploying..."
             cd "$DEPLOY_PATH" || mkdir -p "$DEPLOY_PATH" && cd "$DEPLOY_PATH"
+              
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower
             configure_env_file_if_needed
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
                 generate_caddyfile
                 generate_glance_config
+            elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
+            generate_ai_compose
             fi
             success "All configuration files have been generated in '$DEPLOY_PATH'."
             ;;
