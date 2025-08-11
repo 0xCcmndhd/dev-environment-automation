@@ -1,0 +1,8 @@
+ssh_host: 192.0.2.20
+ssh_user: root
+ssh_key: /root/.ssh/id_rsa
+fan_steps: "35:40,42:65,48:80,55:100"
+backend: pwm
+pwm_paths:
+/sys/devices/platform/nct6775.2592/hwmon/hwmon4/pwm2
+/sys/devices/platform/nct6775.2592/hwmon/hwmon4/pwm3

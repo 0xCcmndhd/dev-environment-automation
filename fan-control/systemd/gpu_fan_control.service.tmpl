@@ -1,0 +1,16 @@
+[Unit]
+Description=Adaptive GPU Fan Control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+EnvironmentFile=/etc/default/gpu_fan_control
+ExecStart=/usr/local/sbin/gpu_fan_control.sh
+Restart=always
+RestartSec=5
+SuccessExitStatus=143  # SIGTERM
+RestartForceExitStatus=2  # Exit code when manual restart needed
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=GPU Fan Control @ {{ ansible_hostname }}
+After=network.target
+
+[Service]
+User=root
+EnvironmentFile=/etc/default/gpu_fan_control
+ExecStart={{ install_dir }}/gpu_fan_control.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,5 @@
+ssh_host: 192.0.2.10
+ssh_user: root
+ssh_key: /root/.ssh/id_rsa
+fan_steps: "35:40,42:65,48:80,55:100"
+backend: ipmi

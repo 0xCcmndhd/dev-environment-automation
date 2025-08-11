@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Unified GPU-Driven Fan Control Script (IPMI/PWM)
+# Version: 1.2.0
+# Maintainer: Aaron Jefferson <ajefferson1111@pm.me>
+# Repo: github.com/yourusername/dev-environment-automation
+#
+# Usage: Control server fan speeds based on GPU VM temperature
+# Features:
+# - Supports IPMI (enterprise) and PWM (consumer) hardware
+# - Temperature thresholds with custom cooling curves
+# - Failsafe fallbacks and graceful exit handling
+# - Dry-run mode for safe testing
+
+# --------------------------
+# CONFIGURATION (SET VIA ENV)
+# --------------------------
+# BACKEND: "ipmi" (Dell) or "pwm" (MSI) REQUIRED
+# SSH_HOST: GPU VM IP address REQUIRED
+# SSH_USER: SSH user (default: root)
+# SSH_KEY: Private key path (default: /root/.ssh/id_rsa)
+# POLL_SECONDS: Check interval (default: 5)
+# FAN_STEPS: "temp:percent,temp:percent" (default: "35:40,42:65,48:80,55:100")
+# FAILSAFE_PERCENT: On temp read failure (default: 100)
+# EXIT_PERCENT: On service stop (default: 60)
+# DRY_RUN: Log only, no hardware changes (default: 0)
+
+# --------------------------
+# INITIALIZATION
+# --------------------------
+# Set defaults
+BACKEND="${BACKEND:-}"
+SSH_HOST="${SSH_HOST:-}"
+SSH_USER="${SSH_USER:-root}"
+SSH_KEY="${SSH_KEY:-/root/.ssh/id_rsa}"
+POLL_SECONDS="${POLL_SECONDS:-5}"
+LOG_PATH="${LOG_PATH:-/var/log/gpu_fan_control.log}"
+FAN_STEPS="${FAN_STEPS:-35:40,42:65,48:80,55:100}"
+FAILSAFE_PERCENT="${FAILSAFE_PERCENT:-100}"
+EXIT_PERCENT="${EXIT_PERCENT:-60}"
+DRY_RUN="${DRY_RUN:-0}"
+
+# Backend-specific defaults
+IPMI_MANUAL_ON_RAW="${IPMI_MANUAL_ON_RAW:-0x30 0x30 0x01 0x00}"
+IPMI_SET_RAW_PREFIX="${IPMI_SET_RAW_PREFIX:-0x30 0x30 0x02 0xff}"
+PWM_PATHS="${PWM_PATHS:-}"
+
+# Create log directory
+mkdir -p "$(dirname "$LOG_PATH")" 2>/dev/null || true
+
+# --------------------------
+# FUNCTIONS
+# --------------------------
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_PATH"
+}
+
+die() {
+  log "FATAL: $*"
+  exit 1
+}
+
+validate_backend() {
+  case "$BACKEND" in
+    ipmi|pwm) return 0 ;;
+    *) die "Invalid BACKEND: '$BACKEND'. Must be 'ipmi' or 'pwm'" ;;
+  esac
+}
+
+setup_lock() {
+  LOCK_PATH="${LOCK_PATH:-/var/run/gpu_fan_control.lock}"
+  if ! mkdir "$LOCK_PATH" 2>/dev/null; then
+    log "Script already running. Exiting."
+    exit 1
+  fi
+  trap 'cleanup' EXIT INT TERM
+}
+
+parse_fan_steps() {
+  IFS=',' read -r -a STEP_ARR <<< "$FAN_STEPS"
+  THRESHOLDS=()
+  PERCENTS=()
+  for pair in "${STEP_ARR[@]}"; do
+    t="${pair%%:*}"
+    p="${pair##*:}"
+    if [[ "$t" =~ ^[0-9]{1,3}$ && "$p" =~ ^[0-9]{1,3}$ ]]; then
+      THRESHOLDS+=("$t")
+      PERCENTS+=("$p")
+    else
+      log "WARNING: Invalid step '$pair' in FAN_STEPS"
+    fi
+  done
+  
+  if [[ ${#THRESHOLDS[@]} -eq 0 ]]; then
+    die "No valid steps in FAN_STEPS='$FAN_STEPS'"
+  fi
+  log "Fan curve: ${#THRESHOLDS[@]} steps configured"
+}
+
+get_gpu_temp() {
+  local cmd="nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | sort -nr | head -1"
+  local ssh_opts="-i '$SSH_KEY' -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+  local raw_temp
+  
+  # Execute SSH command with timeout wraper
+  raw_temp=$(timeout 10 ssh $ssh_opts "$SSH_USER@$SSH_HOST" "$cmd")
+  
+  # Validate response
+  if [[ "$raw_temp" =~ ^[0-9]{1,3}$ ]] && [ "$raw_temp" -lt 120 ]; then
+    echo "$raw_temp"
+  else
+    log "Temp read error: Received '$raw_temp'"
+    echo ""
+  fi
+}
+
+percentage_from_temp() {
+  local temp="$1"
+  local n="${#THRESHOLDS[@]}"
+  
+  for ((i=0; i<n; i++)); do
+    if (( temp < THRESHOLDS[i] )); then
+      echo "${PERCENTS[i]}"
+      return
+    fi
+  done
+  
+  # Use last percent if above all thresholds
+  echo "${PERCENTS[n-1]}"
+}
+
+apply_ipmi_percentage() {
+  local pct="$1"
+  # Clamp percentage
+  (( pct < 0 )) && pct=0
+  (( pct > 100 )) && pct=100
+  
+  # Convert to hex
+  local hex_val=$(printf "0x%02x" "$pct")
+  
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "DRY_RUN: ipmitool raw $IPMI_MANUAL_ON_RAW; ipmitool raw $IPMI_SET_RAW_PREFIX $hex_val"
+    return 0
+  fi
+  
+  # Execute commands
+  ipmitool raw $IPMI_MANUAL_ON_RAW >/dev/null 2>&1
+  ipmitool raw $IPMI_SET_RAW_PREFIX "$hex_val" >/dev/null 2>&1
+}
+
+apply_pwm_percentage() {
+  local pct="$1"
+  # Clamp percentage
+  (( pct < 0 )) && pct=0
+  (( pct > 100 )) && pct=100
+  
+  # Convert to PWM value 0-255
+  local pwm_val=$(( (pct * 255 + 50) / 100 ))  # Round to nearest
+  
+  local applied=0
+  for path in $PWM_PATHS; do
+    [[ -f "$path" ]] || continue
+    
+    # Enable manual control
+    local enable_file="${path}_enable"
+    if [[ -f "$enable_file" ]]; then
+      cur_mode=$(< "$enable_file")
+      [[ "$cur_mode" == "1" ]] || echo 1 > "$enable_file" 2>/dev/null
+    fi
+    
+    # Set speed
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "DRY_RUN: echo $pwm_val > $path"
+    else
+      echo "$pwm_val" > "$path" 2>/dev/null && applied=1
+    fi
+  done
+  
+  if [[ "$applied" -eq 0 ]]; then
+    log "ERROR: PWM SET FAILURE (paths: '$PWM_PATHS')"
+  fi
+}
+
+cleanup() {
+  log "Cleaning up - restoring fans to ${EXIT_PERCENT}%"
+  
+  case "$BACKEND" in
+    ipmi)
+      apply_ipmi_percentage "$EXIT_PERCENT"
+      ;;
+    pwm)
+      apply_pwm_percentage "$EXIT_PERCENT"
+      ;;
+  esac
+  
+  # Release lock
+  rmdir "$LOCK_PATH" 2>/dev/null || true
+}
+
+# --------------------------
+# MAIN EXECUTION
+# --------------------------
+validate_backend
+setup_lock
+parse_fan_steps
+
+log "======================================================================="
+log "Starting GPU Fan Controller $(date '+%Y-%m-%d %H:%M:%S')"
+log "Backend: $BACKEND | VM: $SSH_USER@$SSH_HOST"
+log "Polling: ${POLL_SECONDS}s | Curve: $FAN_STEPS"
+[[ "$DRY_RUN" == "1" ]] && log "DRY RUN MODE ACTIVE (no hardware changes)"
+[[ "$BACKEND" == "pwm" ]] && log "PWM Paths: $PWM_PATHS"
+
+last_percent=""
+while true; do
+  # Get temperature with retries
+  temp=""
+  retry_count=0
+  while [[ -z "$temp" && $retry_count -lt 3 ]]; do
+    temp=$(get_gpu_temp)
+    [[ -z "$temp" ]] && sleep 1
+    retry_count=$((retry_count + 1))
+  done
+
+  # Handle temperature read status
+  if [[ -n "$temp" ]]; then
+    percent=$(percentage_from_temp "$temp")
+    status_msg="GPU: ${temp}°C"
+  else
+    percent="$FAILSAFE_PERCENT"
+    status_msg="TEMP_READ_FAIL"
+  fi
+
+  # Apply new speed if changed
+  if [[ "$percent" != "$last_percent" ]]; then
+    case "$BACKEND" in
+      ipmi) apply_ipmi_percentage "$percent" ;;
+      pwm) apply_pwm_percentage "$percent" ;;
+    esac
+    
+    log "${status_msg} → ${percent}%"
+    last_percent="$percent"
+  fi
+
+  sleep "$POLL_SECONDS"
+done

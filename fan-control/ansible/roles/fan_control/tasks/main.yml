@@ -1,0 +1,30 @@
+- name: Ensure directory
+  file:
+    path: /usr/local/sbin
+    state: directory
+    mode: '0755'
+
+- name: Install script
+  template:
+    src: gpu_fan_control.sh.j2
+    dest: /usr/local/sbin/gpu_fan_control.sh
+    mode: '0755'
+
+- name: Install env configuration
+  template:
+    src: "{{ 'dellproxmox.env.j2' if backend == 'ipmi' else 'msiproxmox.env.j2' }}"
+    dest: /etc/default/gpu_fan_control
+    mode: '0640'
+
+- name: Install systemd service
+  template:
+    src: gpu_fan_control.service.j2
+    dest: /etc/systemd/system/gpu_fan_control.service
+    mode: '0644'
+
+- name: Enable and start
+  systemd:
+    name: gpu_fan_control.service
+    enabled: true
+    state: started
+    daemon_reload: true

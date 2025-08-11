@@ -1,0 +1,5 @@
+/configs/*.env
+/ansible/inventory/hosts
+/ansible/inventory/host_vars/*.yml
+*.pem id_rsa id_ed25519
+/logs/
