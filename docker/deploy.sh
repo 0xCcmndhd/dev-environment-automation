@@ -354,6 +354,7 @@ add_authelia_service() {
     image: authelia/authelia:latest
     container_name: authelia
     restart: unless-stopped
+    command: --config /config/configuration.yml
     depends_on:
       - redis
     volumes:
