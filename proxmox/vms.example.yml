@@ -1,0 +1,75 @@
+# Example Proxmox VM inventory (no secrets)
+# Copy this file to proxmox/vms.yml and edit as needed.
+# Notes:
+# - Do not put passwords or SSH private keys in this file.
+# - SSH keys for cloud-init should be placed on the Proxmox node and referenced via env var PMX_CI_SSH_KEYS.
+# - The script connects to your Proxmox node via SSH and runs 'qm' and 'pvesh' commands remotely.
+#
+# Fields per VM:
+#   vmid           (int, required)       Unique VM ID in Proxmox
+#   name           (string, required)     VM name
+#   node           (string, optional)     Proxmox node name (required only if cloning to a specific node)
+#   clone.template_id (int, optional)     Template VMID to clone from (if omitted, a new VM is created)
+#   memory         (int, MiB, required)   Memory in MiB (e.g., 8192)
+#   cores          (int, required)        Number of CPU cores
+#   sockets        (int, optional)        CPU sockets (default: 1)
+#   cpu            (string, optional)     CPU type (e.g., host)
+#   disk.size_gb   (int, required)        Disk size in GB
+#   disk.storage   (string, required)     Proxmox storage name (e.g., local-lvm)
+#   scsihw         (string, optional)     SCSI controller type (default: virtio-scsi-pci)
+#   net.bridge     (string, required)     Bridge name (e.g., vmbr0)
+#   net.vlan       (int, optional)        VLAN tag
+#   net.model      (string, optional)     NIC model (default: virtio)
+#   net.mac        (string, optional)     MAC address (if you want to pin it)
+#   ipconfig0      (string, optional)     cloud-init IP config (e.g., "ip=dhcp" or "ip=192.168.1.50/24,gw=192.168.1.1")
+#   autostart      (bool, optional)       Start on boot (default: false)
+#   tags           (list, optional)       Proxmox tags (list of strings)
+#   pool           (string, optional)     Proxmox pool name to add this VM to
+#
+# Environment variables used by the script (documented in proxmox/provision.sh header):
+#   PMX_HOST (required), PMX_USER, PMX_PORT, PMX_SSH_OPTS, PMX_DEFAULT_STORAGE, PMX_DEFAULT_BRIDGE,
+#   PMX_CI_USER, PMX_CI_SSH_KEYS
+
+vms:
+  - vmid: 3001
+    name: ai-server
+    node: pve
+    clone:
+      template_id: 9000
+    memory: 16384
+    cores: 8
+    sockets: 1
+    cpu: host
+    disk:
+      size_gb: 100
+      storage: local-lvm
+    scsihw: virtio-scsi-pci
+    net:
+      bridge: vmbr0
+      vlan: 30
+      model: virtio
+    ipconfig0: "ip=dhcp"
+    autostart: true
+    tags: [ai, production]
+    pool: homelab
+
+  - vmid: 3002
+    name: media-server
+    node: pve
+    # No clone: create from scratch with cloud-init
+    memory: 8192
+    cores: 4
+    sockets: 1
+    cpu: host
+    disk:
+      size_gb: 200
+      storage: local-lvm
+    scsihw: virtio-scsi-pci
+    net:
+      bridge: vmbr0
+      vlan: 20
+      model: virtio
+    ipconfig0: "ip=192.168.20.42/24,gw=192.168.20.1"
+    autostart: true
+    tags: [media, staging]
+    pool: homelab
