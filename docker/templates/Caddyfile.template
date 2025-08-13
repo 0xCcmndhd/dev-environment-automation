@@ -97,8 +97,68 @@ vaultwarden.${LOCAL_DOMAIN} {
 #calibre-web.${LOCAL_DOMAIN} { reverse_proxy calibre-web:8083 }
 
 # --- AI Interfaces ---
-open.${LOCAL_DOMAIN} { 
-    reverse_proxy {$AI_SERVER_IP}:3000 
+# Open WebUI (already present)
+open.${LOCAL_DOMAIN} {
+  reverse_proxy http://${AI_SERVER_IP}:3000
+}
+
+# SillyTavern (optional: protect with Authelia like glance/code)
+silly.${LOCAL_DOMAIN} {
+  @authelia path /authelia*
+  handle @authelia {
+    reverse_proxy authelia:9091 {
+      header_up X-Forwarded-Prefix /authelia
+    }
+  }
+  @protected not path /authelia*
+  forward_auth @protected authelia:9091 {
+    uri /authelia/api/authz/forward-auth
+    copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+  }
+  reverse_proxy http://${AI_SERVER_IP}:3001
+}
+
+# n8n (recommend protecting with Authelia)
+n8n.${LOCAL_DOMAIN} {
+  @authelia path /authelia*
+  handle @authelia {
+    reverse_proxy authelia:9091 {
+      header_up X-Forwarded-Prefix /authelia
+    }
+  }
+  @protected not path /authelia*
+  forward_auth @protected authelia:9091 {
+    uri /authelia/api/authz/forward-auth
+    copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+  }
+  # See comment above to apply forward_auth the same way as other protected apps
+  reverse_proxy http://${AI_SERVER_IP}:5678
+}
+
+# ComfyUI (protect if you like)
+comfy.${LOCAL_DOMAIN} {
+  @authelia path /authelia*
+  handle @authelia {
+    reverse_proxy authelia:9091 {
+      header_up X-Forwarded-Prefix /authelia
+    }
+  }
+  @protected not path /authelia*
+  forward_auth @protected authelia:9091 {
+    uri /authelia/api/authz/forward-auth
+    copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+  }
+  reverse_proxy http://${AI_SERVER_IP}:8188
+}
+
+# Ollama API (handy for tools / local apps)
+ollama.${LOCAL_DOMAIN} {
+  reverse_proxy http://${AI_SERVER_IP}:11434
+}
+
+# Local TTS API (OpenAI-compatible)
+tts.${LOCAL_DOMAIN} {
+  reverse_proxy http://${AI_SERVER_IP}:8010
 }
 
 code.${LOCAL_DOMAIN} { 
@@ -135,8 +195,4 @@ uptime.${LOCAL_DOMAIN} {
         copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
     reverse_proxy uptime-kuma:3001
-}
-
-sillytavern.${LOCAL_DOMAIN} {
-    reverse_proxy sillytavern:8000 
 }

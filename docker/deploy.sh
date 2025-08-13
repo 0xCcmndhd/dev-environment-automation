@@ -330,6 +330,30 @@ session:
       expiration: 1h
       inactivity: 5m
       remember_me: 1M
+    - name: authelia_silly
+      domain: silly.${DOMAIN}
+      authelia_url: https://silly.${DOMAIN}/authelia
+      default_redirection_url: https://silly.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
+    - name: authelia_n8n
+      domain: n8n.${DOMAIN}
+      authelia_url: https://n8n.${DOMAIN}/authelia
+      default_redirection_url: https://n8n.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
+    - name: authelia_comfy
+      domain: comfy.${DOMAIN}
+      authelia_url: https://comfy.${DOMAIN}/authelia
+      default_redirection_url: https://comfy.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
 
 storage:
   encryption_key: "${STORAGE_KEY}"
@@ -343,7 +367,7 @@ notifier:
 access_control:
   default_policy: one_factor
   rules:
-    - domain: ["glance.${DOMAIN}", "code.${DOMAIN}", "uptime.${DOMAIN}", "vaultwarden.${DOMAIN}"]
+    - domain: ["glance.${DOMAIN}", "code.${DOMAIN}", "uptime.${DOMAIN}", "vaultwarden.${DOMAIN}", "silly.${DOMAIN}", "n8n.${DOMAIN}", "comfy.${DOMAIN}"]
       policy: one_factor
 
 totp:
@@ -551,6 +575,21 @@ prepare_service_directories() {
             uptime-kuma) mkdir -p "${BASE_DIR}/data" ;;
             vaultwarden) mkdir -p "${BASE_DIR}/data" ;;
             redis) mkdir -p "${BASE_DIR}/data" ;;
+            # --- AI stack services ---
+            ollama) mkdir -p "${BASE_DIR}/data" ;;
+            llamacpp) mkdir -p "${BASE_DIR}/models" ;;
+            openwebui) mkdir -p "${BASE_DIR}/data" ;;
+            pipelines) mkdir -p "${BASE_DIR}/data" ;;
+            sillytavern)
+                mkdir -p "${BASE_DIR}/config" "${BASE_DIR}/data" "${BASE_DIR}/plugins" "${BASE_DIR}/extensions"
+                ;;
+            n8n) mkdir -p "${BASE_DIR}/data" ;;
+            comfyui)
+                mkdir -p "${BASE_DIR}/models" "${BASE_DIR}/input" "${BASE_DIR}/output" "${BASE_DIR}/custom_nodes"
+                ;;
+            tts)
+                mkdir -p "${BASE_DIR}/voices" "${BASE_DIR}/config"
+                ;;
         esac
 
         sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "$BASE_DIR"
@@ -617,7 +656,93 @@ EOF
     success ".env file created securely."
 }
 
+# Optional: AI-specific env additions for profiles and model paths
+configure_ai_env_overrides() {
+    warn "---[ AI Stack Profiles & Paths ]---"
+    echo "Available profiles:"
+    echo "  - openwebui    (Open WebUI frontend)"
+    echo "  - ollama       (Ollama backend)"
+    echo "  - llamacpp     (llama.cpp OpenAI-compatible server)"
+    echo "  - sillytavern  (chat frontend)"
+    echo "  - n8n          (automation)"
+    echo "  - comfyui      (visual pipeline)"
+    echo "  - tts-openedai (OpenAI-compatible TTS)"
+    echo "  - watchtower   (auto-updates on AI host)"
+    local DEFAULT_PROFILES="openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai"
+    read -e -i "$DEFAULT_PROFILES" -p "Enter COMPOSE_PROFILES (comma-separated): " AI_PROFILES
+
+    # Paths with defaults
+    local DEFAULT_OLLAMA_DIR="/opt/models"
+    read -e -i "$DEFAULT_OLLAMA_DIR" -p "Path to Ollama models dir: " OLLAMA_MODELS_DIR
+    read -e -p "Path to llama.cpp models dir (bind mount) [optional]: " LLAMACPP_MODELS_DIR
+    read -e -p "llama.cpp GGUF full path (LLAMACPP_MODEL_PATH) [optional]: " LLAMACPP_MODEL_PATH
+
+    # Update or append keys in .env idempotently
+    grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${AI_PROFILES}|" .env || echo "COMPOSE_PROFILES=${AI_PROFILES}" >> .env
+    grep -q '^OLLAMA_MODELS_DIR=' .env && sed -i "s|^OLLAMA_MODELS_DIR=.*|OLLAMA_MODELS_DIR=${OLLAMA_MODELS_DIR}|" .env || echo "OLLAMA_MODELS_DIR=${OLLAMA_MODELS_DIR}" >> .env
+    if [ -n "$LLAMACPP_MODELS_DIR" ]; then
+        grep -q '^LLAMACPP_MODELS_DIR=' .env && sed -i "s|^LLAMACPP_MODELS_DIR=.*|LLAMACPP_MODELS_DIR=${LLAMACPP_MODELS_DIR}|" .env || echo "LLAMACPP_MODELS_DIR=${LLAMACPP_MODELS_DIR}" >> .env
+    fi
+    if [ -n "$LLAMACPP_MODEL_PATH" ]; then
+        grep -q '^LLAMACPP_MODEL_PATH=' .env && sed -i "s|^LLAMACPP_MODEL_PATH=.*|LLAMACPP_MODEL_PATH=${LLAMACPP_MODEL_PATH}|" .env || echo "LLAMACPP_MODEL_PATH=${LLAMACPP_MODEL_PATH}" >> .env
+    fi
+
+    success "AI profiles and paths updated in .env"
+}
+
+ensure_ai_host_dirs() {
+    # Read values from .env (use defaults if not set)
+    local OMD LMD
+    OMD=$(grep -E '^OLLAMA_MODELS_DIR=' .env | cut -d= -f2)
+    [ -z "$OMD" ] && OMD="/opt/models"
+    LMD=$(grep -E '^LLAMACPP_MODELS_DIR=' .env | cut -d= -f2)
+
+    # Create and set sane perms for host model dirs (readable by container root; writable by your user)
+    if [ ! -d "$OMD" ]; then
+        sudo mkdir -p "$OMD"
+        sudo chown "$USER":"$USER" "$OMD"
+        sudo chmod 755 "$OMD"
+        info "Created Ollama models dir: $OMD"
+    fi
+    if [ -n "$LMD" ] && [ ! -d "$LMD" ]; then
+        sudo mkdir -p "$LMD"
+        sudo chown "$USER":"$USER" "$LMD"
+        sudo chmod 755 "$LMD"
+        info "Created llama.cpp models dir: $LMD"
+    fi
+}
+
+# Map profiles -> directories to prep
+compute_ai_dirs_from_profiles() {
+  local profiles_csv="$1"
+  local -A map=(
+    [openwebui]="openwebui pipelines"
+    [ollama]="ollama"
+    [llamacpp]="llamacpp"
+    [sillytavern]="sillytavern"
+    [n8n]="n8n"
+    [comfyui]="comfyui"
+    [tts-openedai]="tts"
+    [watchtower]="watchtower"
+  )
+  local IFS=','; read -ra profs <<< "$profiles_csv"
+  local out=()
+  for p in "${profs[@]}"; do
+    [ -n "${map[$p]}" ] && out+=(${map[$p]})
+  done
+  printf '%s\n' "${out[@]}"
+}
+
+
 deploy_stack() {
+    # Export .env so COMPOSE_PROFILES and others affect compose behavior
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck source=/dev/null
+        source .env
+        set +a
+    fi
+
     info "The following services are configured for deployment:"
     docker compose -f docker-compose.yml config --services | sed 's/^/    - /'
     echo ""
@@ -627,14 +752,11 @@ deploy_stack() {
         info "Deployment aborted."
         return
     fi
-    
+
     info "Pulling the latest versions of all defined images..."
-    # 'pull' will download any new versions of images like 'caddy:latest'
     docker compose pull
 
     info "Starting or updating containers in detached mode..."
-    # 'up -d' will automatically stop and re-create any containers whose
-    # configuration or image has changed. It leaves unchanged containers running.
     docker compose up -d --remove-orphans
 
     success "Stack has been successfully deployed/updated!"
@@ -704,7 +826,7 @@ EOF
 manage_stack() {
     local STACK_NAME="$1"
     local DEPLOY_PATH="$HOME/docker/$STACK_NAME"
-    
+
     clear
     echo "Managing stack: $STACK_NAME"
     echo "--------------------------"
@@ -721,43 +843,70 @@ manage_stack() {
             info "Preparing to deploy the '$STACK_NAME' stack..."
             mkdir -p "$DEPLOY_PATH"
             cd "$DEPLOY_PATH" || exit
-            
-            # Step 1: Prepare directories with correct permissions FIRST
-            # This is the line that was missing a function to call.
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
 
-            # Step 1: Configure the .env file FIRST.
+            # Always ensure a base .env exists
             configure_env_file_if_needed
 
-            # Step 2: Generate ALL necessary config files.
-            info "Generating configuration files for '$STACK_NAME' stack..."
-            if [ "$STACK_NAME" == "utilities" ]; then
-                generate_utilities_compose
-                generate_glance_config # <-- This will now be found
-                generate_authelia_configs
-            elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
-            generate_ai_compose
+            if [ "$STACK_NAME" == "ai" ]; then
+                # Collect AI-specific env and ensure host model dirs exist
+                configure_ai_env_overrides
+                ensure_ai_host_dirs
+
+                # Build only the needed service dir list from profiles
+                local profiles
+                profiles=$(grep -E '^COMPOSE_PROFILES=' .env | cut -d= -f2)
+                if [ -z "$profiles" ]; then
+                    warn "COMPOSE_PROFILES not set in .env; defaulting to openwebui,ollama,watchtower"
+                    profiles="openwebui,ollama,watchtower"
+                    grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profiles}|" .env || echo "COMPOSE_PROFILES=${profiles}" >> .env
+                fi
+                AI_DIRS=($(compute_ai_dirs_from_profiles "$profiles"))
+                prepare_service_directories "$STACK_NAME" "${AI_DIRS[@]}"
+
+                # Generate AI compose
+                generate_ai_compose
             else
-                error "Config file generator for stack '$STACK_NAME' is not implemented yet."
-            fi
-            
-            # Step 3: Now that all configs are in place, deploy the stack.
-            deploy_stack
-            ;;
-        2) 
-            # --- NEW: CONFIG ONLY MODE ---
-            info "Generating config files for '$STACK_NAME' without deploying..."
-            cd "$DEPLOY_PATH" || mkdir -p "$DEPLOY_PATH" && cd "$DEPLOY_PATH"
-              
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
-            configure_env_file_if_needed
-            if [ "$STACK_NAME" == "utilities" ]; then
+                # Utilities flow: prepare dirs and configs
+                prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
                 generate_utilities_compose
                 generate_glance_config
                 generate_authelia_configs
-            elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
-            generate_ai_compose
             fi
+
+            # Deploy stack
+            deploy_stack
+            ;;
+        2)
+            # --- CONFIG ONLY MODE ---
+            info "Generating config files for '$STACK_NAME' without deploying..."
+            mkdir -p "$DEPLOY_PATH"
+            cd "$DEPLOY_PATH" || exit
+
+            # Ensure .env exists
+            configure_env_file_if_needed
+
+            if [ "$STACK_NAME" == "ai" ]; then
+                # Collect AI env and ensure dirs
+                configure_ai_env_overrides
+                ensure_ai_host_dirs
+
+                local profiles
+                profiles=$(grep -E '^COMPOSE_PROFILES=' .env | cut -d= -f2)
+                if [ -z "$profiles" ]; then
+                    profiles="openwebui,ollama,watchtower"
+                    grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profiles}|" .env || echo "COMPOSE_PROFILES=${profiles}" >> .env
+                fi
+                AI_DIRS=($(compute_ai_dirs_from_profiles "$profiles"))
+                prepare_service_directories "$STACK_NAME" "${AI_DIRS[@]}"
+
+                generate_ai_compose
+            else
+                prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
+                generate_utilities_compose
+                generate_glance_config
+                generate_authelia_configs
+            fi
+
             success "All configuration files have been generated in '$DEPLOY_PATH'."
             ;;
         3)

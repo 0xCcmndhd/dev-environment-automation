@@ -1,28 +1,178 @@
-# docker/templates/ai-compose.yml.template
 version: '3.8'
 
+# AI stack with Compose profiles. Select which to run via COMPOSE_PROFILES in .env
+# Example:
+#   COMPOSE_PROFILES=openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai
+#
+# Notes:
+# - Ollama and llama.cpp are alternative backends. Use one or both.
+# - Open WebUI supports OLLAMA and OpenAI-compatible endpoints.
+# - TTS is OpenAI-compatible (openedai-speech) and can be wired into Open WebUI via TTS_URL.
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
 services:
+  # --- Auto-updates on the AI host ---
+  watchtower:
+    profiles: ["watchtower"]
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=${TZ}
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_CLEANUP=true
+
+  # --- Inference backends ---
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama/data:/root/.ollama
+      - ${OLLAMA_MODELS_DIR:-/opt/models}:/root/.ollama/models
+    environment:
+      - TZ=${TZ}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    <<: *gpu
+
+  llamacpp:
+    profiles: ["llamacpp"]
+    image: ghcr.io/ggerganov/llama.cpp:full
+    container_name: llamacpp
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    # Use an explicit model path (GGUF). Example in .env:
+    # LLAMACPP_MODEL_PATH=/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+    command: ["/bin/bash","-lc","/app/server -m ${LLAMACPP_MODEL_PATH:-/models/model.gguf} -c ${LLAMACPP_CTX_SIZE:-4096} --api --host 0.0.0.0 --port 8000 -ngl ${LLAMACPP_NGL:-999}"]
+    volumes:
+      - ${LLAMACPP_MODELS_DIR:-./llamacpp/models}:/models
+    environment:
+      - TZ=${TZ}
+      - NVIDIA_VISIBLE_DEVICES=all
+    <<: *gpu
+
+  # --- Open WebUI frontend ---
   openwebui:
+    profiles: ["openwebui"]
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     restart: unless-stopped
     ports:
       - "3000:8080"
     volumes:
-      - openwebui-data:/app/backend/data
+      - ./openwebui/data:/app/backend/data
     environment:
-      # We tell WebUI to connect to Ollama running on the host machine.
-      # The IP address comes from our .env file.
-      - OLLAMA_BASE_URL=http://${AI_SERVER_IP}:11434
       - TZ=${TZ}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      # Use Ollama when enabled
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      # Use llama.cpp's OpenAI-compatible API when enabled
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://llamacpp:8000/v1}
+      # Pipelines (optional)
+      - PIPELINES_URL=${PIPELINES_URL:-http://pipelines:9099}
+      - PIPELINES_API_KEY=${PIPELINES_API_KEY:-0p3n-w3bu!}
+      # Local TTS (openedai-speech). Leave empty to disable in UI.
+      - TTS_URL=${TTS_URL:-http://tts-openedai:8000/v1}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    <<: *gpu
 
-volumes:
-  openwebui-data:
-    name: openwebui_data
+  pipelines:
+    profiles: ["openwebui"]
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: pipelines
+    restart: unless-stopped
+    ports:
+      - "9099:9099"
+    volumes:
+      - ./pipelines/data:/app/pipelines
+    environment:
+      - TZ=${TZ}
+      - PIPELINES_API_KEY=${PIPELINES_API_KEY:-0p3n-w3bu!}
+    <<: *gpu
+
+  # --- SillyTavern frontend ---
+  sillytavern:
+    profiles: ["sillytavern"]
+    image: ghcr.io/sillytavern/sillytavern:latest
+    container_name: sillytavern
+    hostname: sillytavern
+    restart: unless-stopped
+    ports:
+      - "3001:8000"
+    volumes:
+      - ./sillytavern/config:/home/node/app/config
+      - ./sillytavern/data:/home/node/app/data
+      - ./sillytavern/plugins:/home/node/app/plugins
+      - ./sillytavern/extensions:/home/node/app/public/scripts/extensions/third-party
+    environment:
+      - TZ=${TZ}
+
+  # --- n8n automation ---
+  n8n:
+    profiles: ["n8n"]
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - TZ=${TZ}
+      - N8N_HOST=${N8N_HOST:-n8n.${LOCAL_DOMAIN}}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-https://n8n.${LOCAL_DOMAIN}/}
+      - GENERIC_TIMEZONE=${TZ}
+    volumes:
+      - ./n8n/data:/home/node/.n8n
+
+  # --- ComfyUI visual pipeline ---
+  comfyui:
+    profiles: ["comfyui"]
+    image: ghcr.io/comfyanonymous/comfyui:latest
+    container_name: comfyui
+    restart: unless-stopped
+    ports:
+      - "8188:8188"
+    environment:
+      - TZ=${TZ}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ./comfyui/models:/root/.cache/ComfyUI
+      - ./comfyui/input:/input
+      - ./comfyui/output:/output
+      - ./comfyui/custom_nodes:/comfyui/custom_nodes
+    <<: *gpu
+
+  # --- Local TTS (OpenAI-compatible) ---
+  tts-openedai:
+    profiles: ["tts-openedai"]
+    image: ghcr.io/matatonic/openedai-speech:latest
+    container_name: tts-openedai
+    restart: unless-stopped
+    ports:
+      - "8010:8000"
+    env_file:
+      - ./tts/speech.env
+    volumes:
+      - ./tts/voices:/app/voices
+      - ./tts/config:/app/config
+    environment:
+      - TZ=${TZ}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    <<: *gpu
