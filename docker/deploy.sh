@@ -263,8 +263,10 @@ EOF
         warn "Authelia configuration.yml not found. Creating a minimal working configuration."
         local SESSION_SECRET
         local STORAGE_KEY
+        local RESET_JWT
         SESSION_SECRET=$(generate_random_b64)
         STORAGE_KEY=$(generate_random_b64)
+        RESET_JWT=$(generate_random_b64)
         local DOMAIN="${LOCAL_DOMAIN:-lan}"
 
         cat > "$CONFIG_YML" << EOF
@@ -315,9 +317,13 @@ totp:
   issuer: "${DOMAIN}"
   period: 30
   skew: 1
+
+identity_validation:
+  reset_password:
+    jwt_secret: "${RESET_JWT}"
 EOF
         success "Created $CONFIG_YML"
-        unset SESSION_SECRET STORAGE_KEY DOMAIN
+        unset SESSION_SECRET STORAGE_KEY RESET_JWT DOMAIN
     else
         info "Existing Authelia configuration.yml found. Skipping."
     fi
@@ -511,7 +517,7 @@ prepare_service_directories() {
             caddy) mkdir -p "${BASE_DIR}/data" ;;
             glance) mkdir -p "${BASE_DIR}/assets" ;;
             code) mkdir -p "${BASE_DIR}/projects" ;;
-            authelia) mkdir -p "${BASE_DIR}/secrets" ;;
+            authelia) ;;
             uptime-kuma) mkdir -p "${BASE_DIR}/data" ;;
             vaultwarden) mkdir -p "${BASE_DIR}/data" ;;
             redis) mkdir -p "${BASE_DIR}/data" ;;
