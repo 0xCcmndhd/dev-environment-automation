@@ -239,7 +239,7 @@ generate_authelia_configs() {
         fi
         info "Hashing admin password with Authelia (argon2id)..."
         local HASH
-        HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2id --password "$ADMIN_PASS" | tail -n1)
+        HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password "$ADMIN_PASS" --variant argon2id --iterations 3 --parallelism 4 --memory 65536 | sed 's/^Digest: //' | grep -Eo '^\$argon2(id|i)\$.*' | tail -n1)
         if [ -z "$HASH" ]; then
             error "Failed to generate password hash via Authelia container."
             return 1
