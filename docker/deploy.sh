@@ -211,6 +211,70 @@ generate_glance_config() {
     fi
 }
  
+# New services for Utilities stack
+add_redis_service() {
+    info "  -> Adding Redis service..."
+    cat >> docker-compose.yml << 'EOF'
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redis/data:/data
+EOF
+}
+
+add_authelia_service() {
+    info "  -> Adding Authelia service..."
+    cat >> docker-compose.yml << 'EOF'
+
+  authelia:
+    image: authelia/authelia:latest
+    container_name: authelia
+    restart: unless-stopped
+    depends_on:
+      - redis
+    volumes:
+      - ./authelia/config:/config
+      - ./authelia/secrets:/secrets:ro
+    environment:
+      - TZ=${TZ}
+EOF
+}
+
+add_uptime_kuma_service() {
+    info "  -> Adding Uptime Kuma service..."
+    cat >> docker-compose.yml << 'EOF'
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    volumes:
+      - ./uptime-kuma/data:/app/data
+    environment:
+      - TZ=${TZ}
+EOF
+}
+
+add_vaultwarden_service() {
+    info "  -> Adding Vaultwarden service..."
+    cat >> docker-compose.yml << 'EOF'
+
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - WEBSOCKET_ENABLED=true
+    volumes:
+      - ./vaultwarden/data:/data
+EOF
+}
+
 # Appends the code-server service block to docker-compose.yml (optional)
 add_code_server_service() {
     info "  -> Adding code-server service..."
@@ -265,6 +329,10 @@ generate_utilities_compose() {
     add_watchtower_service
     add_caddy_service # Example of how we'll add more later
     add_glance_service # Example
+    add_redis_service
+    add_authelia_service
+    add_uptime_kuma_service
+    add_vaultwarden_service
 
     # Optionally include code-server service
     read -p "Include code-server (VS Code in browser)? (y/N) " -n 1 -r
@@ -485,7 +553,7 @@ manage_stack() {
             
             # Step 1: Prepare directories with correct permissions FIRST
             # This is the line that was missing a function to call.
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower code
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
 
             # Step 1: Configure the .env file FIRST.
             configure_env_file_if_needed
@@ -510,7 +578,7 @@ manage_stack() {
             info "Generating config files for '$STACK_NAME' without deploying..."
             cd "$DEPLOY_PATH" || mkdir -p "$DEPLOY_PATH" && cd "$DEPLOY_PATH"
               
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower code
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
             configure_env_file_if_needed
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
