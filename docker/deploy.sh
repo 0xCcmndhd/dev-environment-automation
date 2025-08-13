@@ -259,17 +259,20 @@ EOF
 
     # 2) configuration.yml
     local CONFIG_YML="${CONFIG_DIR}/configuration.yml"
-    if [ ! -f "$CONFIG_YML" ]; then
-        warn "Authelia configuration.yml not found. Creating a minimal working configuration."
-        local SESSION_SECRET
-        local STORAGE_KEY
-        local RESET_JWT
-        SESSION_SECRET=$(generate_random_b64)
-        STORAGE_KEY=$(generate_random_b64)
-        RESET_JWT=$(generate_random_b64)
-        local DOMAIN="${LOCAL_DOMAIN:-lan}"
+    warn "Creating/Updating Authelia configuration.yml from generator (backup will be kept)."
+    local SESSION_SECRET
+    local STORAGE_KEY
+    local RESET_JWT
+    SESSION_SECRET=$(generate_random_b64)
+    STORAGE_KEY=$(generate_random_b64)
+    RESET_JWT=$(generate_random_b64)
+    local DOMAIN="${LOCAL_DOMAIN:-lan}"
 
-        cat > "$CONFIG_YML" << EOF
+    if [ -f "$CONFIG_YML" ]; then
+        mv "$CONFIG_YML" "${CONFIG_YML}.bak.$(date +%Y%m%d-%H%M%S)"
+    fi
+
+    cat > "$CONFIG_YML" << EOF
 server:
   address: "0.0.0.0:9091"
 
@@ -277,7 +280,6 @@ log:
   level: info
 
 theme: dark
-default_redirection_url: https://glance.${DOMAIN}
 
 authentication_backend:
   file:
@@ -289,14 +291,40 @@ authentication_backend:
       memory: 65536
 
 session:
+  secret: "${SESSION_SECRET}"
   cookies:
-    - name: authelia_session
-      domain: ${DOMAIN}
+    - name: authelia_glance
+      domain: glance.${DOMAIN}
+      authelia_url: https://authelia.${DOMAIN}
+      default_redirection_url: https://glance.${DOMAIN}
       same_site: lax
       expiration: 1h
       inactivity: 5m
       remember_me: 1M
-      secret: "${SESSION_SECRET}"
+    - name: authelia_code
+      domain: code.${DOMAIN}
+      authelia_url: https://authelia.${DOMAIN}
+      default_redirection_url: https://code.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
+    - name: authelia_uptime
+      domain: uptime.${DOMAIN}
+      authelia_url: https://authelia.${DOMAIN}
+      default_redirection_url: https://uptime.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
+    - name: authelia_vw
+      domain: vaultwarden.${DOMAIN}
+      authelia_url: https://authelia.${DOMAIN}
+      default_redirection_url: https://vaultwarden.${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
 
 storage:
   encryption_key: "${STORAGE_KEY}"
@@ -322,11 +350,8 @@ identity_validation:
   reset_password:
     jwt_secret: "${RESET_JWT}"
 EOF
-        success "Created $CONFIG_YML"
-        unset SESSION_SECRET STORAGE_KEY RESET_JWT DOMAIN
-    else
-        info "Existing Authelia configuration.yml found. Skipping."
-    fi
+    success "Created/Updated $CONFIG_YML"
+    unset SESSION_SECRET STORAGE_KEY RESET_JWT DOMAIN
 
     # Ensure ownership and reasonable permissions
     local CURRENT_UID CURRENT_GID
