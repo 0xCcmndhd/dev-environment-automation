@@ -153,6 +153,9 @@ add_caddy_service() {
       - "80:80"
       - "443:443"
       - "443:443/udp"
+    dns:
+      - ${PIHOLE_PRIMARY_IP}
+      - ${PIHOLE_SECONDARY_IP}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile
       - ./caddy/data:/data
@@ -274,7 +277,9 @@ EOF
 
     cat > "$CONFIG_YML" << EOF
 server:
-  address: "0.0.0.0:9091"
+  address: "tcp://0.0.0.0:9091/authelia"
+  buffers:
+    read:8192
 
 log:
   level: info
@@ -295,7 +300,7 @@ session:
   cookies:
     - name: authelia_glance
       domain: glance.${DOMAIN}
-      authelia_url: https://authelia.${DOMAIN}
+      authelia_url: https://glance.${DOMAIN}/authelia
       default_redirection_url: https://glance.${DOMAIN}
       same_site: lax
       expiration: 1h
@@ -303,7 +308,7 @@ session:
       remember_me: 1M
     - name: authelia_code
       domain: code.${DOMAIN}
-      authelia_url: https://authelia.${DOMAIN}
+      authelia_url: https://code.${DOMAIN}/authelia
       default_redirection_url: https://code.${DOMAIN}
       same_site: lax
       expiration: 1h
@@ -311,7 +316,7 @@ session:
       remember_me: 1M
     - name: authelia_uptime
       domain: uptime.${DOMAIN}
-      authelia_url: https://authelia.${DOMAIN}
+      authelia_url: https://uptime.${DOMAIN}/authelia
       default_redirection_url: https://uptime.${DOMAIN}
       same_site: lax
       expiration: 1h
@@ -319,7 +324,7 @@ session:
       remember_me: 1M
     - name: authelia_vw
       domain: vaultwarden.${DOMAIN}
-      authelia_url: https://authelia.${DOMAIN}
+      authelia_url: https://vaultwarden.${DOMAIN}/authelia
       default_redirection_url: https://vaultwarden.${DOMAIN}
       same_site: lax
       expiration: 1h

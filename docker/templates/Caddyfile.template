@@ -5,9 +5,9 @@
 
 # --- Core Infrastructure Reverse Proxies ---
 
-proxmox.{$LOCAL_DOMAIN} {
+proxmox.${LOCAL_DOMAIN} {
     # Proxmox runs on port 8006
-    reverse_proxy https://{$PROXMOX_IP}:8006 {
+    reverse_proxy https://${PROXMOX_IP}:8006 {
         # Tell Caddy to trust the self-signed cert from Proxmox
         transport http {
             tls_insecure_skip_verify
@@ -15,9 +15,9 @@ proxmox.{$LOCAL_DOMAIN} {
     }
 }
 
-unifi.{$LOCAL_DOMAIN} {
+unifi.${LOCAL_DOMAIN} {
     # The reverse_proxy directive and its arguments are on one line
-    reverse_proxy https://{$UNIFI_IP}:443 {
+    reverse_proxy https://${UNIFI_IP}:443 {
         # The transport block is indented within the reverse_proxy
         transport http {
             tls_insecure_skip_verify
@@ -26,60 +26,117 @@ unifi.{$LOCAL_DOMAIN} {
 }
 
 # --- Infrastructure ---
-glance.{$LOCAL_DOMAIN} {
-    # glance is the service name from the util docker-compose
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
+glance.${LOCAL_DOMAIN} {
+    # Serve Authelia portal under /authelia, preserve prefix (no auth on this path)
+    @authelia path /authelia*
+    handle @authelia {
+        reverse_proxy authelia:9091 {
+            header_up X-Forwarded-Prefix /authelia
+        }
+    }
+
+    # Protect everything else with forward_auth (exclude /authelia)
+    @protected not path /authelia*
+    forward_auth @protected authelia:9091 {
+        uri /authelia/api/authz/forward-auth
         copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
+
     reverse_proxy glance:8080
 }
 
-authelia.{$LOCAL_DOMAIN} {
-    reverse_proxy authelia:9091 
+authelia.${LOCAL_DOMAIN} {
+    @authelia path /authelia*
+    handle @authelia {
+        reverse_proxy authelia:9091 {
+            header_up X-Forwarded-Prefix /authelia
+        }
+    }
+
+    @protected not path /authelia*
+    forward_auth @protected authelia:9091 {
+        uri /authelia/api/authz/forward-auth
+        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+    }
+    reverse_proxy authelia:9091
 }
 
-vaultwarden.{$LOCAL_DOMAIN} {
-    reverse_proxy vaultwarden:80 
-}
+vaultwarden.${LOCAL_DOMAIN} {
+    # Serve Authelia portal under /authelia, preserve prefix (no auth on this path)
+    @authelia path /authelia*
+    handle @authelia {
+        reverse_proxy authelia:9091 {
+            header_up X-Forwarded-Prefix /authelia
+        }
+    }
+
+    # Protect everything else with forward_auth (exclude /authelia)
+    @protected not path /authelia*
+    forward_auth @protected authelia:9091 {
+        uri /authelia/api/authz/forward-auth
+        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+    }
+    reverse_proxy vaultwarden:80
+} 
+
 
 # --- Digital Library Management ---
-#sonarr.{$LOCAL_DOMAIN} { reverse_proxy sonarr:8989 }
-#radarr.{$LOCAL_DOMAIN} { reverse_proxy radarr:7878 }
-#prowlarr.{$LOCAL_DOMAIN} { reverse_proxy prowlarr:9696 }
-#lidarr.{$LOCAL_DOMAIN} { reverse_proxy lidarr:8686 }
-#readarr.{$LOCAL_DOMAIN} { reverse_proxy readarr:8787 }
-#bazarr.{$LOCAL_DOMAIN} { reverse_proxy bazarr:6767 }
-#qbittorrent.{$LOCAL_DOMAIN} { reverse_proxy qbittorrent:8080 }
+#sonarr.${LOCAL_DOMAIN} { reverse_proxy sonarr:8989 }
+#radarr.${LOCAL_DOMAIN} { reverse_proxy radarr:7878 }
+#prowlarr.${LOCAL_DOMAIN} { reverse_proxy prowlarr:9696 }
+#lidarr.${LOCAL_DOMAIN} { reverse_proxy lidarr:8686 }
+#readarr.${LOCAL_DOMAIN} { reverse_proxy readarr:8787 }
+#bazarr.${LOCAL_DOMAIN} { reverse_proxy bazarr:6767 }
+#qbittorrent.${LOCAL_DOMAIN} { reverse_proxy qbittorrent:8080 }
 
 # --- Media Servers ---
 # Plex requires special handling, often runs on its own IP or has its own certs.
 # We will access it via http for now.
-# plex.{$LOCAL_DOMAIN} { reverse_proxy plex_ip:32400 } 
-#jellyfin.{$LOCAL_DOMAIN} { reverse_proxy jellyfin:8096 }
-#calibre-web.{$LOCAL_DOMAIN} { reverse_proxy calibre-web:8083 }
+# plex.${LOCAL_DOMAIN} { reverse_proxy plex_ip:32400 } 
+#jellyfin.${LOCAL_DOMAIN} { reverse_proxy jellyfin:8096 }
+#calibre-web.${LOCAL_DOMAIN} { reverse_proxy calibre-web:8083 }
 
 # --- AI Interfaces ---
-open.{$LOCAL_DOMAIN} { 
+open.${LOCAL_DOMAIN} { 
     reverse_proxy {$AI_SERVER_IP}:3000 
 }
 
-code.{$LOCAL_DOMAIN} { 
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
+code.${LOCAL_DOMAIN} { 
+    # Serve Authelia portal under /authelia, preserve prefix (no auth on this path)
+    @authelia path /authelia*
+    handle @authelia {
+        reverse_proxy authelia:9091 {
+            header_up X-Forwarded-Prefix /authelia
+        }
+    }
+
+    # Protect everything else with forward_auth (exclude /authelia)
+    @protected not path /authelia*
+    forward_auth @protected authelia:9091 {
+        uri /authelia/api/authz/forward-auth
         copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
     reverse_proxy code:8080 
 }
 
-uptime.{$LOCAL_DOMAIN} {
-    forward_auth authelia:9091 {
-        uri /api/authz/forward-auth
+uptime.${LOCAL_DOMAIN} {
+    # Serve Authelia portal under /authelia, preserve prefix (no auth on this path)
+    @authelia path /authelia*
+    handle @authelia {
+        reverse_proxy authelia:9091 {
+            header_up X-Forwarded-Prefix /authelia
+        }
+    }
+
+    # Protect everything else with forward_auth (exclude /authelia)
+    @protected not path /authelia*
+    forward_auth @protected authelia:9091 {
+        uri /authelia/api/authz/forward-auth
         copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
     reverse_proxy uptime-kuma:3001
 }
 
-sillytavern.{$LOCAL_DOMAIN} {
+sillytavern.${LOCAL_DOMAIN} {
     reverse_proxy sillytavern:8000 
 }
