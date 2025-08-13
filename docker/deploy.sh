@@ -211,6 +211,125 @@ generate_glance_config() {
     envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
     success "   -> glance.yml created/updated at $CONFIG_PATH"
 }
+
+# Generates minimal, working Authelia config and users database if missing
+generate_authelia_configs() {
+    local CONFIG_DIR="./authelia/config"
+    mkdir -p "$CONFIG_DIR"
+
+    # Helper to generate secure random base64 if missing
+    generate_random_b64() {
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -base64 32
+        else
+            head -c 32 /dev/urandom | base64
+        fi
+    }
+
+    # 1) users_database.yml
+    local USERS_DB="${CONFIG_DIR}/users_database.yml"
+    if [ ! -f "$USERS_DB" ]; then
+        warn "Authelia users_database.yml not found. Creating a minimal one for user 'admin'."
+        local ADMIN_PASS
+        read -p "Enter password for Authelia admin user 'admin': " -s ADMIN_PASS
+        echo
+        if [ -z "$ADMIN_PASS" ]; then
+            error "Empty password provided for Authelia admin. Aborting users database creation."
+            return 1
+        fi
+        info "Hashing admin password with Authelia (argon2id)..."
+        local HASH
+        HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2id --password "$ADMIN_PASS" | tail -n1)
+        if [ -z "$HASH" ]; then
+            error "Failed to generate password hash via Authelia container."
+            return 1
+        fi
+        cat > "$USERS_DB" << EOF
+users:
+  admin:
+    displayname: Admin
+    email: admin@example.com
+    password: "${HASH}"
+EOF
+        success "Created $USERS_DB"
+        unset ADMIN_PASS HASH
+    else
+        info "Existing Authelia users_database.yml found. Skipping."
+    fi
+
+    # 2) configuration.yml
+    local CONFIG_YML="${CONFIG_DIR}/configuration.yml"
+    if [ ! -f "$CONFIG_YML" ]; then
+        warn "Authelia configuration.yml not found. Creating a minimal working configuration."
+        local SESSION_SECRET
+        local STORAGE_KEY
+        SESSION_SECRET=$(generate_random_b64)
+        STORAGE_KEY=$(generate_random_b64)
+        local DOMAIN="${LOCAL_DOMAIN:-lan}"
+
+        cat > "$CONFIG_YML" << EOF
+server:
+  address: "0.0.0.0:9091"
+
+log:
+  level: info
+
+theme: dark
+default_redirection_url: https://glance.${DOMAIN}
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2id
+      iterations: 3
+      parallelism: 4
+      memory: 65536
+
+session:
+  cookies:
+    - name: authelia_session
+      domain: ${DOMAIN}
+      same_site: lax
+      expiration: 1h
+      inactivity: 5m
+      remember_me: 1M
+      secret: "${SESSION_SECRET}"
+
+storage:
+  encryption_key: "${STORAGE_KEY}"
+  local:
+    path: /config/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+
+access_control:
+  default_policy: one_factor
+  rules:
+    - domain: ["glance.${DOMAIN}", "code.${DOMAIN}", "uptime.${DOMAIN}", "vaultwarden.${DOMAIN}"]
+      policy: one_factor
+
+totp:
+  issuer: "${DOMAIN}"
+  period: 30
+  skew: 1
+EOF
+        success "Created $CONFIG_YML"
+        unset SESSION_SECRET STORAGE_KEY DOMAIN
+    else
+        info "Existing Authelia configuration.yml found. Skipping."
+    fi
+
+    # Ensure ownership and reasonable permissions
+    local CURRENT_UID CURRENT_GID
+    CURRENT_UID=$(id -u)
+    CURRENT_GID=$(id -g)
+    sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "$CONFIG_DIR"
+    chmod 644 "$CONFIG_DIR"/* || true
+    success "Authelia config files are ready."
+}
  
 # New services for Utilities stack
 add_redis_service() {
@@ -239,7 +358,6 @@ add_authelia_service() {
       - redis
     volumes:
       - ./authelia/config:/config
-      - ./authelia/secrets:/secrets:ro
     environment:
       - TZ=${TZ}
 EOF
@@ -579,6 +697,7 @@ manage_stack() {
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
                 generate_glance_config # <-- This will now be found
+                generate_authelia_configs
             elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
             generate_ai_compose
             else
@@ -598,6 +717,7 @@ manage_stack() {
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
                 generate_glance_config
+                generate_authelia_configs
             elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
             generate_ai_compose
             fi
