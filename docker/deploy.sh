@@ -375,14 +375,29 @@ prepare_service_directories() {
 
     info "Preparing and validating configuration directories for '$STACK_NAME'..."
     
-    local CURRENT_UID=$(id -u)
-    local CURRENT_GID=$(id -g)
+    local CURRENT_UID
+    CURRENT_UID=$(id -u)
+    local CURRENT_GID
+    CURRENT_GID=$(id -g)
 
     for SERVICE in "${SERVICES[@]}"; do
-        local CONFIG_DIR="./${SERVICE}/config"
+        local BASE_DIR="./${SERVICE}"
+        local CONFIG_DIR="${BASE_DIR}/config"
         info "  -> Ensuring directory exists and has correct permissions: $CONFIG_DIR"
         mkdir -p "$CONFIG_DIR"
-        sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "./${SERVICE}"
+
+        # Create additional data dirs used by bind mounts for specific services
+        case "$SERVICE" in
+            caddy) mkdir -p "${BASE_DIR}/data" ;;
+            glance) mkdir -p "${BASE_DIR}/assets" ;;
+            code) mkdir -p "${BASE_DIR}/projects" ;;
+            authelia) mkdir -p "${BASE_DIR}/secrets" ;;
+            uptime-kuma) mkdir -p "${BASE_DIR}/data" ;;
+            vaultwarden) mkdir -p "${BASE_DIR}/data" ;;
+            redis) mkdir -p "${BASE_DIR}/data" ;;
+        esac
+
+        sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "$BASE_DIR"
     done
     success "All service directories prepared."
 }
@@ -562,7 +577,6 @@ manage_stack() {
             info "Generating configuration files for '$STACK_NAME' stack..."
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
-                generate_caddyfile
                 generate_glance_config # <-- This will now be found
             elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
             generate_ai_compose
@@ -582,7 +596,6 @@ manage_stack() {
             configure_env_file_if_needed
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
-                generate_caddyfile
                 generate_glance_config
             elif [ "$STACK_NAME" == "ai" ]; then # <-- ADD THIS BLOCK
             generate_ai_compose

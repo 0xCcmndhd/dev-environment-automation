@@ -178,7 +178,6 @@ apply_vm() {
     fi
     if [[ -n "${tags:-}" && "$tags" != "null" ]]; then
       remote_apply "qm set $vmid --tags \"$tags\""
-    end_if=
     fi
     if [[ "${autostart,,}" == "true" ]]; then
       remote_apply "qm set $vmid --onboot 1"
