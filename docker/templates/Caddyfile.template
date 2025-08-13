@@ -27,12 +27,12 @@ unifi.{$LOCAL_DOMAIN} {
 
 # --- Infrastructure ---
 glance.{$LOCAL_DOMAIN} {
-    # glace is the service name from the util docker-compose
+    # glance is the service name from the util docker-compose
     forward_auth authelia:9091 {
         uri /api/authz/forward-auth
         copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
-    reverse_proxy glance:61208 
+    reverse_proxy glance:8080
 }
 
 authelia.{$LOCAL_DOMAIN} {

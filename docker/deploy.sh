@@ -189,26 +189,27 @@ generate_glance_config() {
     # Use the reliable global variable for the template path
     local TEMPLATE_PATH="$TEMPLATES_DIR/glance.yml.template"
     local CONFIG_PATH="./glance/config/glance.yml"
-    
-    if [ ! -f "$CONFIG_PATH" ]; then
-        if [ ! -f "$TEMPLATE_PATH" ]; then
-            error "Glance config template not found at '$TEMPLATE_PATH'!"
-            return 1
-        fi
-        
-        info "  -> glance.yml not found. Generating from template..."
-        mkdir -p "$(dirname "$CONFIG_PATH")"
-        
-        # Source the .env file to load variables, then use envsubst
-        set -a
-        # shellcheck source=.env
-        source .env
-        set +a
-        envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
-        success "   -> glance.yml created at $CONFIG_PATH"
-    else
-        warn "  -> Existing glance.yml found. Skipping generation."
+
+    if [ ! -f "$TEMPLATE_PATH" ]; then
+        error "Glance config template not found at '$TEMPLATE_PATH'!"
+        return 1
     fi
+
+    info "  -> Generating glance.yml from template..."
+    mkdir -p "$(dirname "$CONFIG_PATH")"
+
+    # Backup the old file before overwriting, if it exists.
+    if [ -f "$CONFIG_PATH" ]; then
+        mv "$CONFIG_PATH" "${CONFIG_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+    fi
+
+    # Source the .env file to load variables, then use envsubst
+    set -a
+    # shellcheck source=.env
+    source .env
+    set +a
+    envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
+    success "   -> glance.yml created/updated at $CONFIG_PATH"
 }
  
 # New services for Utilities stack

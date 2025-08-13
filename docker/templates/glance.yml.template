@@ -29,19 +29,19 @@ pages:
             title: Core Infrastructure
             sites:
               - title: Proxmox (via Caddy)
-              url: https://proxmox.${LOCAL_DOMAIN}:8006
-              icon: di:proxmox
+                url: https://proxmox.${LOCAL_DOMAIN}:8006
+                icon: di:proxmox
               - title: Proxmox (Direct IP)
-              url: https://${PROXMOX_IP}:8006
-              allow-insecure: true # Important for the direct IP link
-              icon: di:proxmox 
+                url: https://${PROXMOX_IP}:8006
+                allow-insecure: true # Important for the direct IP link
+                icon: di:proxmox
               - title: UniFi (via Caddy)
-              url: https://unifi.${LOCAL_DOMAIN}
-              icon: di:unifi
+                url: https://unifi.${LOCAL_DOMAIN}
+                icon: di:unifi
               - title: UniFi (Direct IP)
-              url: https://${UNIFI_IP}
-              allow-insecure: true # Important for the direct IP link
-              icon: di:unifi
+                url: https://${UNIFI_IP}
+                allow-insecure: true # Important for the direct IP link
+                icon: di:unifi
               
       - size: full
         widgets:
