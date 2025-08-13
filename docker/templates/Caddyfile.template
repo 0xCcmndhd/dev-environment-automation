@@ -48,4 +48,5 @@ calibre-web.{$LOCAL_DOMAIN} { reverse_proxy calibre-web:8083 }
 
 # --- AI Interfaces ---
 open-webui.{$LOCAL_DOMAIN} { reverse_proxy open-webui:8080 }
+code.{$LOCAL_DOMAIN} { reverse_proxy code:8080 }
 sillytavern.{$LOCAL_DOMAIN} { reverse_proxy sillytavern:8000 }

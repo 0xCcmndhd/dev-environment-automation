@@ -210,6 +210,25 @@ generate_glance_config() {
         warn "  -> Existing glance.yml found. Skipping generation."
     fi
 }
+ 
+# Appends the code-server service block to docker-compose.yml (optional)
+add_code_server_service() {
+    info "  -> Adding code-server service..."
+    cat >> docker-compose.yml << 'EOF'
+
+  code:
+    image: codercom/code-server:latest
+    container_name: code
+    restart: unless-stopped
+    # No ports exposed; Caddy will reverse proxy internally
+    environment:
+      - TZ=${TZ}
+      - PASSWORD=${CODE_PASSWORD}
+    volumes:
+      - ./code/config:/home/coder/.config
+      - ./code/projects:/home/coder/project
+EOF
+}
 
 generate_ai_compose() {
     # Use the reliable global variable for the template path
@@ -246,6 +265,13 @@ generate_utilities_compose() {
     add_watchtower_service
     add_caddy_service # Example of how we'll add more later
     add_glance_service # Example
+
+    # Optionally include code-server service
+    read -p "Include code-server (VS Code in browser)? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        add_code_server_service
+    fi
 
     # After adding all services, generate configs that depend on them
     generate_caddyfile
@@ -459,7 +485,7 @@ manage_stack() {
             
             # Step 1: Prepare directories with correct permissions FIRST
             # This is the line that was missing a function to call.
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower code
 
             # Step 1: Configure the .env file FIRST.
             configure_env_file_if_needed
@@ -484,7 +510,7 @@ manage_stack() {
             info "Generating config files for '$STACK_NAME' without deploying..."
             cd "$DEPLOY_PATH" || mkdir -p "$DEPLOY_PATH" && cd "$DEPLOY_PATH"
               
-            prepare_service_directories "$STACK_NAME" caddy glance watchtower
+            prepare_service_directories "$STACK_NAME" caddy glance watchtower code
             configure_env_file_if_needed
             if [ "$STACK_NAME" == "utilities" ]; then
                 generate_utilities_compose
