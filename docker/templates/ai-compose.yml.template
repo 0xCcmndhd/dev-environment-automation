@@ -142,7 +142,7 @@ services:
   # --- ComfyUI visual pipeline ---
   comfyui:
     profiles: ["comfyui"]
-    image: ghcr.io/comfyanonymous/comfyui:latest
+    image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:cu126-slim}
     container_name: comfyui
     restart: unless-stopped
     ports:
@@ -151,11 +151,14 @@ services:
       - TZ=${TZ}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CLI_ARGS=${COMFYUI_ARGS:-}
     volumes:
       - ./comfyui/models:/root/.cache/ComfyUI
       - ./comfyui/input:/input
       - ./comfyui/output:/output
       - ./comfyui/custom_nodes:/comfyui/custom_nodes
+      # yanwk maps a single storage root; keep everything under ./comfyui/storage
+      - ./comfyui/storage:/root
     <<: *gpu
 
   # --- Local TTS (OpenAI-compatible) ---
