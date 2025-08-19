@@ -496,6 +496,36 @@ generate_ai_compose() {
     success "   -> AI docker-compose.yml created at $CONFIG_PATH"
 }
 
+write_llamacpp_assets() {
+    # Only write if llamacpp is in profiles
+    if ! grep -E '^COMPOSE_PROFILES=' .env | grep -q 'llamacpp'; then
+        return
+    fi
+    local BASE="./llamacpp"
+    mkdir -p "$BASE/models"
+    # Copy Dockerfile template
+    if [ -f "$TEMPLATES_DIR/llamacpp.Dockerfile.template" ]; then
+        cp "$TEMPLATES_DIR/llamacpp.Dockerfile.template" "$BASE/Dockerfile"
+    fi
+    # Copy model downloader
+    if [ -f "$TEMPLATES_DIR/get_235b.py.template" ]; then
+        cp "$TEMPLATES_DIR/get_235b.py.template" "$BASE/models/get_235b.py"
+    fi
+}
+
+install_heavy_mode_script() {
+    if ! grep -E '^COMPOSE_PROFILES=' .env | grep -q 'llamacpp'; then
+        return
+    fi
+    local TARGET="./heavy-mode.sh"
+    if [ -f "$TEMPLATES_DIR/heavy-mode.sh.template" ]; then
+        cp "$TEMPLATES_DIR/heavy-mode.sh.template" "$TARGET"
+        chmod +x "$TARGET"
+    fi
+}
+
+
+
 # ==============================================================================
 # MAIN COMPOSE FILE GENERATOR
 # This function orchestrates the creation of the final docker-compose.yml.
@@ -712,6 +742,18 @@ ensure_ai_host_dirs() {
     fi
 }
 
+ensure_llamacpp_env_defaults() {
+    # idempotent inserts
+    grep -q '^LLAMACPP_CTX_SIZE=' .env || echo 'LLAMACPP_CTX_SIZE=16384' >> .env
+    grep -q '^LLAMACPP_NGL=' .env || echo 'LLAMACPP_NGL=80' >> .env
+    grep -q '^LLAMACPP_THREADS=' .env || echo 'LLAMACPP_THREADS=24' >> .env
+    grep -q '^LLAMACPP_THREADS_BATCH=' .env || echo 'LLAMACPP_THREADS_BATCH=24' >> .env
+    # If user gave a models dir but no model path, set a sensible default (matches compose)
+    if grep -q '^LLAMACPP_MODELS_DIR=' .env && ! grep -q '^LLAMACPP_MODEL_PATH=' .env; then
+        echo 'LLAMACPP_MODEL_PATH=/models/Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL/UD-Q2_K_XL/Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL-00001-of-00002.gguf' >> .env
+    fi
+}
+
 # Map profiles -> directories to prep
 compute_ai_dirs_from_profiles() {
   local profiles_csv="$1"
@@ -862,9 +904,11 @@ manage_stack() {
                 fi
                 AI_DIRS=($(compute_ai_dirs_from_profiles "$profiles"))
                 prepare_service_directories "$STACK_NAME" "${AI_DIRS[@]}"
-
+                write_llamacpp_assets
+                ensure_llamacpp_env_defaults
                 # Generate AI compose
                 generate_ai_compose
+                install_heavy_mode_script
             else
                 # Utilities flow: prepare dirs and configs
                 prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden

@@ -1,4 +1,3 @@
-version: '3.8'
 
 # AI stack with Compose profiles. Select which to run via COMPOSE_PROFILES in .env
 # Example:
@@ -51,14 +50,39 @@ services:
 
   llamacpp:
     profiles: ["llamacpp"]
-    image: ghcr.io/ggerganov/llama.cpp:full
+    build: ./llamacpp
     container_name: llamacpp
     restart: unless-stopped
     ports:
       - "8000:8000"
-    # Use an explicit model path (GGUF). Example in .env:
-    # LLAMACPP_MODEL_PATH=/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
-    command: ["/bin/bash","-lc","/app/server -m ${LLAMACPP_MODEL_PATH:-/models/model.gguf} -c ${LLAMACPP_CTX_SIZE:-4096} --api --host 0.0.0.0 --port 8000 -ngl ${LLAMACPP_NGL:-999}"]
+    command:
+      - /opt/llama.cpp/build/bin/llama-server
+      - -m
+      - ${LLAMACPP_MODEL_PATH:-/models/Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL/UD-Q2_K_XL/Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL-00001-of-00002.gguf}
+      - -c
+      - ${LLAMACPP_CTX_SIZE:-16384}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - -ngl
+      - ${LLAMACPP_NGL:-80}
+      - -ot
+      - .ffn_.*_exps.=CPU
+      - --flash-attn
+      - --cache-type-k
+      - q4_1
+      - --cache-type-v
+      - q4_1
+      - --threads
+      - ${LLAMACPP_THREADS:-24}
+      - --threads-batch
+      - ${LLAMACPP_THREADS_BATCH:-24}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
     volumes:
       - ${LLAMACPP_MODELS_DIR:-./llamacpp/models}:/models
     environment:

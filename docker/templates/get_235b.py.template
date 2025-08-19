@@ -1,0 +1,12 @@
+#may want to run pip install huggingface_hub first if missing, requires python3
+import os
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+from huggingface_hub import snapshot_download
+
+# Downloads UD-Q2_K_XL shards into ./Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL/UD-Q2_K_XL
+snapshot_download(
+    repo_id = "unsloth/Qwen3-235B-A22B-Thinking-2507-GGUF",
+    local_dir = "./Qwen3-235B-A22B-Thinking-2507-UD-Q2_K_XL",
+    allow_patterns = ["UD-Q2_K_XL/*"],
+)
+print("Downloaded UD-Q2_K_XL successfully.")

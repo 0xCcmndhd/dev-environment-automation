@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STACK_DIR="${STACK_DIR:-$HOME/docker/ai}"
+COMPOSE="docker compose -f $STACK_DIR/docker-compose.yml"
+
+usage() { echo "Usage: $0 {on|off|status}"; }
+
+status() {
+  $COMPOSE ps || true
+  echo; nvidia-smi || true
+}
+
+heavy_on() {
+  echo "[heavy] Stopping Ollama..."
+  $COMPOSE --profile ollama stop ollama || true
+  echo "[heavy] Starting llama.cpp (235B)..."
+  $COMPOSE --profile llamacpp up -d --build llamacpp
+  echo "[heavy] Waiting for healthcheck..."
+  for i in {1..30}; do
+    if curl -sf "http://localhost:8000/health" >/dev/null; then
+      echo "[heavy] llama.cpp is healthy."
+      break
+    fi
+    sleep 2
+  done
+  echo "[heavy] Use http://localhost:8000/v1 (OpenAI API)."
+}
+
+heavy_off() {
+  echo "[heavy] Stopping llama.cpp..."
+  $COMPOSE --profile llamacpp stop llamacpp || true
+  echo "[heavy] Starting Ollama..."
+  $COMPOSE --profile ollama up -d ollama
+  echo "[heavy] Done. Ollama at http://localhost:11434."
+}
+
+case "${1:-}" in
+  on) heavy_on ;;
+  off) heavy_off ;;
+  status) status ;;
+  *) usage; exit 1 ;;
+esac

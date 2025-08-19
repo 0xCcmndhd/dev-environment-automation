@@ -1,0 +1,33 @@
+FROM nvidia/cuda:12.6.2-devel-ubuntu22.04
+
+# Build deps + curl support for --host/--port HTTP server
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential cmake ninja-build curl \
+    libcurl4-openssl-dev pkg-config ca-certificates zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone https://github.com/ggml-org/llama.cpp
+
+# Configure: CUDA on, Flash-Attn enabled (try ALL_QUANTS, fallback to FA), arch=86 (RTX 3090)
+RUN set -eux; \
+  cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
+    -G Ninja \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DGGML_CUDA=ON \
+    -DLLAMA_CURL=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=86 \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+  || cmake -S /opt/llama.cpp -B /opt/llama.cpp/build \
+    -G Ninja \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DGGML_CUDA=ON \
+    -DLLAMA_CURL=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=86 \
+    -DGGML_CUDA_FA=ON
+
+# Build server (and cli for debugging)
+RUN cmake --build /opt/llama.cpp/build --config Release -j --target llama-server llama-cli
+
+WORKDIR /opt/llama.cpp
+CMD ["/opt/llama.cpp/build/bin/llama-server","--help"]
