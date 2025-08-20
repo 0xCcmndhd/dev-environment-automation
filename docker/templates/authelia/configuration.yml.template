@@ -1,0 +1,37 @@
+server:
+  address: "tcp://0.0.0.0:9091"
+log:
+  level: info
+theme: dark
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+    password:
+      algorithm: argon2id
+      iterations: 3
+      parallelism: 4
+      memory: 65536
+session:
+  secret: "${SESSION_SECRET}"
+  cookies:
+#__COOKIES__
+storage:
+  encryption_key: "${STORAGE_KEY}"
+  local:
+    path: /config/db.sqlite3
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+access_control:
+  default_policy: one_factor
+  rules:
+    - domain:
+#__ACCESS_RULE_DOMAINS__
+      policy: one_factor
+totp:
+  issuer: "${LOCAL_DOMAIN}"
+  period: 30
+  skew: 1
+identity_validation:
+  reset_password:
+    jwt_secret: "${RESET_JWT}"

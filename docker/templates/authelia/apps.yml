@@ -1,0 +1,22 @@
+# Which apps should get SSO and cookies
+# - sso: true  => app protected via forward_auth and gets a cookie entry
+# - cookie: true => force cookie entry even if sso is false (e.g., vault)
+domain: lan
+apps:
+  - name: glance
+    sso: true
+  - name: code
+    sso: true
+  - name: uptime
+    sso: true
+  - name: vault
+    sso: false
+    cookie: true   # admin-only is protected in Caddy; cookie is still useful
+  - name: silly
+    sso: false
+  - name: n8n
+    sso: true
+  - name: comfy
+    sso: true
+  - name: ooba
+    sso: true

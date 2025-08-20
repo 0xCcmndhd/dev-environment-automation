@@ -216,179 +216,128 @@ generate_glance_config() {
 }
 
 # Generates minimal, working Authelia config and users database if missing
-generate_authelia_configs() {
+generate_authelia_from_template() {
     local CONFIG_DIR="./authelia/config"
+    local TEMPLATE_PATH="$TEMPLATES_DIR/authelia/configuration.yml.template"
+    local APPS_YML="$TEMPLATES_DIR/authelia/apps.yml"
+    local OUT_YML="${CONFIG_DIR}/configuration.yml"
+    local USERS_DB="${CONFIG_DIR}/users_database.yml"
+
     mkdir -p "$CONFIG_DIR"
 
-    # Helper to generate secure random base64 if missing
-    generate_random_b64() {
-        if command -v openssl >/dev/null 2>&1; then
-            openssl rand -base64 32
-        else
-            head -c 32 /dev/urandom | base64
-        fi
+    # Ensure yq via Docker (no host dep)
+    run_yq() {
+        docker run --rm -i \
+          -v "$PWD":/work -w /work \
+          ghcr.io/mikefarah/yq:latest "$@"
     }
 
-    # 1) users_database.yml
-    local USERS_DB="${CONFIG_DIR}/users_database.yml"
+    # 1) Minimal users DB if missing
     if [ ! -f "$USERS_DB" ]; then
         warn "Authelia users_database.yml not found. Creating a minimal one for user 'admin'."
         local ADMIN_PASS
         read -p "Enter password for Authelia admin user 'admin': " -s ADMIN_PASS
         echo
         if [ -z "$ADMIN_PASS" ]; then
-            error "Empty password provided for Authelia admin. Aborting users database creation."
+            error "Empty password provided for Authelia admin."
             return 1
         fi
-        info "Hashing admin password with Authelia (argon2id)..."
+        info "Hashing admin password (argon2id)..."
         local HASH
-        HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password "$ADMIN_PASS" --variant argon2id --iterations 3 --parallelism 4 --memory 65536 | sed 's/^Digest: //' | grep -Eo '^\$argon2(id|i)\$.*' | tail -n1)
-        if [ -z "$HASH" ]; then
-            error "Failed to generate password hash via Authelia container."
-            return 1
-        fi
-        cat > "$USERS_DB" << EOF
+        HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password "$ADMIN_PASS" --variant argon2id --iterations 3 --parallelism 4 --memory 65536 | sed 's/^Digest: //' | grep -E '^\$argon2(id|i)\$' | tail -n1)
+        cat > "$USERS_DB" <<EOF
 users:
   admin:
     displayname: Admin
     email: admin@example.com
     password: "${HASH}"
 EOF
-        success "Created $USERS_DB"
         unset ADMIN_PASS HASH
+        success "Created $USERS_DB"
     else
-        info "Existing Authelia users_database.yml found. Skipping."
+        info "Existing users_database.yml found."
     fi
 
-    # 2) configuration.yml
-    local CONFIG_YML="${CONFIG_DIR}/configuration.yml"
-    warn "Creating/Updating Authelia configuration.yml from generator (backup will be kept)."
-    local SESSION_SECRET
-    local STORAGE_KEY
-    local RESET_JWT
-    SESSION_SECRET=$(generate_random_b64)
-    STORAGE_KEY=$(generate_random_b64)
-    RESET_JWT=$(generate_random_b64)
-    local DOMAIN="${LOCAL_DOMAIN:-lan}"
-
-    if [ -f "$CONFIG_YML" ]; then
-        mv "$CONFIG_YML" "${CONFIG_YML}.bak.$(date +%Y%m%d-%H%M%S)"
+    # 2) Read domain from apps.yml (authoritative)
+    if [ ! -f "$APPS_YML" ]; then
+        error "Missing $APPS_YML"
+        return 1
     fi
+    local DOMAIN
+    DOMAIN=$(run_yq -r '.domain' "$APPS_YML")
+    [ -z "$DOMAIN" ] && DOMAIN="${LOCAL_DOMAIN:-lan}"
 
-    cat > "$CONFIG_YML" << EOF
-server:
-  address: "tcp://0.0.0.0:9091/authelia"
-  buffers:
-    read:8192
+    # 3) Preserve secrets if config exists
+    local SESSION_SECRET STORAGE_KEY RESET_JWT
+    if [ -f "$OUT_YML" ]; then
+        info "Preserving existing Authelia secrets."
+        SESSION_SECRET=$(awk '$1=="session:"{ins=1;next} ins && $1=="secret:"{print $2; ins=0}' "$OUT_YML")
+        STORAGE_KEY=$(awk '$1=="storage:"{ins=1;next} ins && $1=="encryption_key:"{print $2; ins=0}' "$OUT_YML")
+        RESET_JWT=$(awk '$1=="identity_validation:"{ins=1;next} ins && $1=="jwt_secret:"{print $2; ins=0}' "$OUT_YML")
+        mv "$OUT_YML" "${OUT_YML}.bak.$(date +%Y%m%d-%H%M%S)"
+    fi
+    # Fallback secrets if any missing
+    gen_b64() { openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64; }
+    [ -z "$SESSION_SECRET" ] && SESSION_SECRET=$(gen_b64)
+    [ -z "$STORAGE_KEY" ] && STORAGE_KEY=$(gen_b64)
+    [ -z "$RESET_JWT" ] && RESET_JWT=$(gen_b64)
 
-log:
-  level: info
+    # 4) Build cookies list (apps with sso==true or cookie==true)
+    local COOKIES
+    COOKIES=$(DOMAIN="$DOMAIN" run_yq -P '
+      .apps
+      | map(select((has("sso") and .sso == true) or (has("cookie") and .cookie == true))
+        | {
+            name: ("authelia_" + .name),
+            domain: (.name + "." + env(DOMAIN)),
+            authelia_url: ("https://auth." + .name + "." + env(DOMAIN)),
+            default_redirection_url: ("https://" + .name + "." + env(DOMAIN)),
+            same_site: "lax",
+            expiration: "1h",
+            inactivity: "5m",
+            remember_me: "1M"
+          }
+      )
+    ' "$APPS_YML" | sed 's/^/    /')
 
-theme: dark
+    # 5) Build access_control rule domain list
+    local DOMAINS
+    DOMAINS=$(DOMAIN="$DOMAIN" run_yq -P '
+      .apps
+      | map(select((has("sso") and .sso == true) or (has("cookie") and .cookie == true))
+        | .name + "." + env(DOMAIN)
+      )
+    ' "$APPS_YML" | sed 's/^/      /')
 
-authentication_backend:
-  file:
-    path: /config/users_database.yml
-    password:
-      algorithm: argon2id
-      iterations: 3
-      parallelism: 4
-      memory: 65536
+    # 6) Render from template
+    if [ ! -f "$TEMPLATE_PATH" ]; then
+        error "Missing template $TEMPLATE_PATH"
+        return 1
+    fi
+    mkdir -p "$(dirname "$OUT_YML")"
+    sed \
+      -e "s|\${SESSION_SECRET}|${SESSION_SECRET}|g" \
+      -e "s|\${STORAGE_KEY}|${STORAGE_KEY}|g" \
+      -e "s|\${RESET_JWT}|${RESET_JWT}|g" \
+      -e "s|\${LOCAL_DOMAIN}|${DOMAIN}|g" \
+      -e "/__COOKIES__/{
+            r /dev/stdin
+            d
+          }" \
+      -e "/__ACCESS_RULE_DOMAINS__/{
+            r /dev/stdin
+            d
+          }" \
+      "$TEMPLATE_PATH" \
+      <<<"$COOKIES"$'\n'"$DOMAINS" > "$OUT_YML"
 
-session:
-  secret: "${SESSION_SECRET}"
-  cookies:
-    - name: authelia_glance
-      domain: glance.${DOMAIN}
-      authelia_url: https://glance.${DOMAIN}/authelia
-      default_redirection_url: https://glance.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_code
-      domain: code.${DOMAIN}
-      authelia_url: https://code.${DOMAIN}/authelia
-      default_redirection_url: https://code.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_uptime
-      domain: uptime.${DOMAIN}
-      authelia_url: https://uptime.${DOMAIN}/authelia
-      default_redirection_url: https://uptime.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_vw
-      domain: vaultwarden.${DOMAIN}
-      authelia_url: https://vaultwarden.${DOMAIN}/authelia
-      default_redirection_url: https://vaultwarden.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_silly
-      domain: silly.${DOMAIN}
-      authelia_url: https://silly.${DOMAIN}/authelia
-      default_redirection_url: https://silly.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_n8n
-      domain: n8n.${DOMAIN}
-      authelia_url: https://n8n.${DOMAIN}/authelia
-      default_redirection_url: https://n8n.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
-    - name: authelia_comfy
-      domain: comfy.${DOMAIN}
-      authelia_url: https://comfy.${DOMAIN}/authelia
-      default_redirection_url: https://comfy.${DOMAIN}
-      same_site: lax
-      expiration: 1h
-      inactivity: 5m
-      remember_me: 1M
+    # 7) Permissions
+    local UID_ GID_
+    UID_=$(id -u); GID_=$(id -g)
+    sudo chown -R "$UID_":"$GID_" "$CONFIG_DIR"
+    chmod 640 "$OUT_YML" "$USERS_DB" 2>/dev/null || true
 
-storage:
-  encryption_key: "${STORAGE_KEY}"
-  local:
-    path: /config/db.sqlite3
-
-notifier:
-  filesystem:
-    filename: /config/notification.txt
-
-access_control:
-  default_policy: one_factor
-  rules:
-    - domain: ["glance.${DOMAIN}", "code.${DOMAIN}", "uptime.${DOMAIN}", "vaultwarden.${DOMAIN}", "silly.${DOMAIN}", "n8n.${DOMAIN}", "comfy.${DOMAIN}"]
-      policy: one_factor
-
-totp:
-  issuer: "${DOMAIN}"
-  period: 30
-  skew: 1
-
-identity_validation:
-  reset_password:
-    jwt_secret: "${RESET_JWT}"
-EOF
-    success "Created/Updated $CONFIG_YML"
-    unset SESSION_SECRET STORAGE_KEY RESET_JWT DOMAIN
-
-    # Ensure ownership and reasonable permissions
-    local CURRENT_UID CURRENT_GID
-    CURRENT_UID=$(id -u)
-    CURRENT_GID=$(id -g)
-    sudo chown -R "$CURRENT_UID":"$CURRENT_GID" "$CONFIG_DIR"
-    chmod 644 "$CONFIG_DIR"/* || true
-    success "Authelia config files are ready."
+    success "Authelia config generated at $OUT_YML"
 }
  
 # New services for Utilities stack
@@ -914,7 +863,7 @@ manage_stack() {
                 prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
                 generate_utilities_compose
                 generate_glance_config
-                generate_authelia_configs
+                generate_authelia_from_template
             fi
 
             # Deploy stack
@@ -948,7 +897,7 @@ manage_stack() {
                 prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
                 generate_utilities_compose
                 generate_glance_config
-                generate_authelia_configs
+                generate_authelia_from_template
             fi
 
             success "All configuration files have been generated in '$DEPLOY_PATH'."
