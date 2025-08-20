@@ -162,4 +162,4 @@ tmux source ~/.config/tmux/tmux.conf
 info "Installing tmux plugins..."
 ~/.config/tmux/plugins/tpm/bin/install_plugins
 
-info "tmux setup complete! Restart tmux to see the changes."g
+info "tmux setup complete! Restart tmux to see the changes."

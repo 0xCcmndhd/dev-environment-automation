@@ -66,3 +66,55 @@ Security Notes
 
     No public ports are required; use private network access only.
     Enforce SSO (Authelia) for administrative apps when enabled.
+
+
+AI Stack Operations
+
+Deploy or Update (AI)
+    cd docker
+    ./deploy.sh
+    Select “AI” → Deploy or Update Stack
+    Choose COMPOSE_PROFILES (e.g., openwebui,ollama,watchtower or include llamacpp, sillytavern, etc.)
+    Verify:
+        docker compose -f ~/docker/ai/docker-compose.yml ps
+        curl -f http://localhost:8000/health    # llama.cpp health (if enabled)
+        curl -f http://localhost:11434/api/tags # Ollama health (if enabled)
+
+Profiles and Directory Layout
+    The AI stack will create directories only for selected profiles under ~/docker/ai/*
+    Update COMPOSE_PROFILES in ~/docker/ai/.env and re-run deploy.sh → “Generate/Update Config Files” to change the selection
+
+Open WebUI Wiring
+    Defaults:
+        OLLAMA_BASE_URL=http://ollama:11434
+        OPENAI_API_BASE_URL=http://llamacpp:8000/v1
+        TTS_URL=http://tts-openedai:8000/v1
+    Check container logs if endpoints are not reachable:
+        docker compose -f ~/docker/ai/docker-compose.yml logs -f open-webui
+
+llama.cpp Tuning
+    Set in ~/docker/ai/.env:
+        LLAMACPP_MODEL_PATH=/models/<your>.gguf
+        LLAMACPP_CTX_SIZE=16384
+        LLAMACPP_NGL=80
+        LLAMACPP_THREADS=24
+        LLAMACPP_THREADS_BATCH=24
+    The template places MoE experts on CPU via:
+        -ot .ffn_.*_exps.=CPU
+    Increase LLAMACPP_NGL or context size only if VRAM allows.
+    Healthcheck:
+        curl -f http://localhost:8000/health
+
+Heavy Mode Helper (if llamacpp profile selected)
+    ~/docker/ai/heavy-mode.sh status  # show compose + nvidia-smi
+    ~/docker/ai/heavy-mode.sh on      # stop Ollama, start llama.cpp
+    ~/docker/ai/heavy-mode.sh off     # stop llama.cpp, start Ollama
+
+Troubleshooting
+    Containers won’t start:
+        docker compose -f ~/docker/ai/docker-compose.yml up -d --build
+        docker compose -f ~/docker/ai/docker-compose.yml logs -f
+    CUDA / Flash-Attn errors:
+        Ensure host driver + toolkit match; the image builds llama.cpp with CUDA and Flash-Attn for arch 86 (Ampere).
+    OOM on CPU:
+        Reduce context (LLAMACPP_CTX_SIZE) or run fewer services.

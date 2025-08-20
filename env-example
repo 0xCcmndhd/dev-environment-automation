@@ -1,0 +1,34 @@
+# Copy this file to .env (per-stack .env files are generated under ~/docker/<stack>/ by docker/deploy.sh)
+# Root .env is only an example; the deployer writes stack-specific .env files in ~/docker/utilities and ~/docker/ai.
+
+# --- General Settings ---
+TZ=America/New_York
+LOCAL_DOMAIN=lan
+PUID=1000
+PGID=1000
+
+# --- Glance Widget Settings ---
+GLANCE_WEATHER_LOCATION=Philadelphia
+
+# --- Infrastructure IPs & Secrets ---
+PROXMOX_IP=
+UNIFI_IP=
+TRUENAS_IP=
+PIHOLE_PRIMARY_IP=
+PIHOLE_SECONDARY_IP=
+PIHOLE_PASSWORD=
+
+# --- Service VM IPs ---
+AI_SERVER_IP=
+MEDIA_SERVER_IP=
+DOWNLOADS_SERVER_IP=
+
+# --- AI Stack (overrides are written by docker/deploy.sh into ~/docker/ai/.env) ---
+COMPOSE_PROFILES=openwebui,ollama,watchtower
+OLLAMA_MODELS_DIR=/opt/models
+# LLAMACPP_MODELS_DIR=
+# LLAMACPP_MODEL_PATH=/models/<your>.gguf
+LLAMACPP_CTX_SIZE=16384
+LLAMACPP_NGL=80
+LLAMACPP_THREADS=24
+LLAMACPP_THREADS_BATCH=24
