@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#heavy-mode.sh
 set -euo pipefail
 
 STACK_DIR="${STACK_DIR:-$HOME/docker/ai}"

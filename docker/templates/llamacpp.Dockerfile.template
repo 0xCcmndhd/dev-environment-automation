@@ -1,5 +1,5 @@
 FROM nvidia/cuda:12.6.2-devel-ubuntu22.04
-
+#llamacpp.Dockerfile.template
 # Build deps + curl support for --host/--port HTTP server
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git build-essential cmake ninja-build curl \

@@ -1,0 +1,155 @@
+# Downloads stack — clients + grabbers with optional VPN killswitch via Gluetun
+# Example COMPOSE_PROFILES:
+#   vpn,qbittorrent,sabnzbd,yt-dlp,pinchflat,podgrab,watchtower
+#
+# Paths:
+# - DL_ROOT: root for downloads (shared read-only to media VM for imports)
+#
+# VPN notes:
+# - Gluetun routes and firewalls traffic. Any service using `network_mode: "container:gluetun"`
+#   goes only through the VPN and must have its ports exposed on the gluetun service.
+# - Mullvad removed port-forwarding; incoming torrent port generally not available.
+
+services:
+  watchtower:
+    profiles: ["watchtower"]
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=${TZ}
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_CLEANUP=true
+
+  # --- VPN killswitch ---
+  gluetun:
+    profiles: ["vpn"]
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=${TZ}
+      - VPN_SERVICE_PROVIDER=${GLUETUN_VPN_SERVICE_PROVIDER:-mullvad}
+      - VPN_TYPE=${GLUETUN_VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${GLUETUN_WG_PRIVATE_KEY}
+      - SERVER_CITIES=${GLUETUN_SERVER_CITIES:-Stockholm}
+      # Optional:
+      # - WIREGUARD_ADDRESSES=${GLUETUN_WG_ADDRESSES:-10.2.0.2/32}
+      # - SERVER_COUNTRIES=${GLUETUN_SERVER_COUNTRIES:-Sweden}
+      # - FIREWALL_OUTBOUND_SUBNETS=${GLUETUN_FIREWALL_OUTBOUND_SUBNETS:-192.168.0.0/16,10.0.0.0/8}
+      # - FIREWALL_VPN_INPUT_PORTS=${GLUETUN_VPN_INPUT_PORTS:-} # if your provider supports PF
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
+    volumes:
+      - ./gluetun:/gluetun
+    # Expose ports for any app routed through Gluetun (qBittorrent Web UI here)
+    ports:
+      - "8080:8080" # qBittorrent Web UI
+      # If you route other apps via VPN, expose their UIs here instead of on the app container:
+      # - "8070:8080"   # SABnzbd UI (if routed via VPN)
+      # - "8484:8080"   # yt-dlp-web-ui (if routed via VPN)
+      # - "8945:8945"   # Pinchflat (if routed via VPN)
+      # - "8088:8080"   # Podgrab (if routed via VPN)
+      # Torrent ingress examples (not typically usable with Mullvad, kept for reference):
+      # - "6881:6881"
+      # - "6881:6881/udp"
+
+  # --- qBittorrent (routed via Gluetun) ---
+  qbittorrent:
+    profiles: ["qbittorrent"]
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - ./qbittorrent/config:/config
+      - ${DL_ROOT}:/downloads
+    depends_on:
+      - gluetun
+    network_mode: "container:gluetun"
+
+  # --- SABnzbd (direct by default; optionally route via VPN) ---
+  sabnzbd:
+    profiles: ["sabnzbd"]
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ./sabnzbd/config:/config
+      - ${DL_ROOT}:/downloads
+    ports:
+      - "8070:8080"
+    # To route SABnzbd through VPN, comment 'ports' above, and uncomment below:
+    # depends_on: [gluetun]
+    # network_mode: "container:gluetun"
+    # Then expose 8070 on gluetun's 'ports'.
+
+  # --- yt-dlp web UI (direct by default; optionally via VPN) ---
+  yt-dlp-web-ui:
+    profiles: ["yt-dlp"]
+    image: ghcr.io/kmb32123/yt-dlp-web-ui:latest
+    container_name: yt-dlp-web-ui
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - AUDIO_DOWNLOADS=${DL_ROOT}/audio
+      - VIDEO_DOWNLOADS=${DL_ROOT}/video
+    volumes:
+      - ./yt-dlp/config:/config
+      - ${DL_ROOT}:/downloads
+    ports:
+      - "8484:8080"
+    # Route via VPN:
+    # depends_on: [gluetun]
+    # network_mode: "container:gluetun"
+    # and expose 8484 on gluetun.
+
+  # --- Pinchflat (direct by default; optionally via VPN) ---
+  pinchflat:
+    profiles: ["pinchflat"]
+    image: ghcr.io/karec/pinchflat:latest
+    container_name: pinchflat
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ./pinchflat/config:/config
+      - ${DL_ROOT}:/downloads
+    ports:
+      - "8945:8945"
+    # Route via VPN:
+    # depends_on: [gluetun]
+    # network_mode: "container:gluetun"
+
+  # --- Podgrab (direct by default; optionally via VPN) ---
+  podgrab:
+    profiles: ["podgrab"]
+    image: akhilrex/podgrab:latest
+    container_name: podgrab
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - CHECK_FREQUENCY=720
+    volumes:
+      - ./podgrab/config:/config
+      - ${DL_ROOT}/podcasts:/assets
+    ports:
+      - "8088:8080"
+    # Route via VPN:
+    # depends_on: [gluetun]
+    # network_mode: "container:gluetun"

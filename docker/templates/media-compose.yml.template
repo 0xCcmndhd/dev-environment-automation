@@ -1,0 +1,217 @@
+# Media stack — profile-driven Arr + servers + libraries
+# Example COMPOSE_PROFILES:
+#   arr,jellyfin,plex,overseerr,audiobookshelf,calibre-web,photoprism,immich,stashapp,watchtower
+#
+# Paths:
+# - MEDIA_ROOT: root for libraries
+# - DL_ROOT: remote downloads share (from downloads VM) mounted read-only where appropriate
+
+services:
+  watchtower:
+    profiles: ["watchtower"]
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=${TZ}
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_CLEANUP=true
+
+  # --- *Arr suite (all optional; enable subset as needed) ---
+  prowlarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/prowlarr:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./prowlarr/config:/config
+    ports: ["9696:9696"]
+
+  sonarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./sonarr/config:/config
+      - "${MEDIA_ROOT}:/media"
+      - "${DL_ROOT}:/downloads:ro"
+    ports: ["8989:8989"]
+
+  radarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./radarr/config:/config
+      - "${MEDIA_ROOT}:/media"
+      - "${DL_ROOT}:/downloads:ro"
+    ports: ["7878:7878"]
+
+  lidarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/lidarr:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./lidarr/config:/config
+      - "${MEDIA_ROOT}:/media"
+      - "${DL_ROOT}:/downloads:ro"
+    ports: ["8686:8686"]
+
+  readarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/readarr:nightly
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./readarr/config:/config
+      - "${MEDIA_ROOT}:/media"
+      - "${DL_ROOT}:/downloads:ro"
+    ports: ["8787:8787"]
+
+  bazarr:
+    profiles: ["arr"]
+    image: lscr.io/linuxserver/bazarr:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./bazarr/config:/config
+      - "${MEDIA_ROOT}:/media"
+    ports: ["6767:6767"]
+
+  # --- Media servers ---
+  jellyfin:
+    profiles: ["jellyfin"]
+    image: lscr.io/linuxserver/jellyfin:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    devices:
+      - /dev/dri:/dev/dri # Intel iGPU (optional)
+    volumes:
+      - ./jellyfin/config:/config
+      - "${MEDIA_ROOT}/Videos:/data/videos:ro"
+      - "${MEDIA_ROOT}/Music:/data/music:ro"
+      - "${MEDIA_ROOT}/Books:/data/books:ro"
+    ports: ["8096:8096"]
+
+  plex:
+    profiles: ["plex"]
+    image: plexinc/pms-docker:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - PLEX_CLAIM=${PLEX_CLAIM}
+    network_mode: bridge
+    volumes:
+      - ./plex/config:/config
+      - "${MEDIA_ROOT}/Videos:/data/videos:ro"
+      - "${MEDIA_ROOT}/Music:/data/music:ro"
+    ports:
+      - "32400:32400"
+      - "32469:32469"
+      - "8324:8324"
+      - "1900:1900/udp"
+      - "32410:32410/udp"
+      - "32412:32412/udp"
+      - "32413:32413/udp"
+      - "32414:32414/udp"
+
+  overseerr:
+    profiles: ["overseerr"]
+    image: sctx/overseerr:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./overseerr/config:/app/config
+    ports: ["5055:5055"]
+
+  # --- Libraries ---
+  audiobookshelf:
+    profiles: ["audiobookshelf"]
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    restart: unless-stopped
+    environment: [TZ=${TZ}]
+    volumes:
+      - ./audiobookshelf/config:/config
+      - ./audiobookshelf/metadata:/metadata
+      - ${MEDIA_ROOT}/audiobooks:/audiobooks
+      - ${MEDIA_ROOT}/podcasts:/podcasts
+    ports: ["13378:80"]
+
+  calibre:
+    profiles: ["calibre-web"]
+    image: lscr.io/linuxserver/calibre:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./calibre/config:/config
+      - ${MEDIA_ROOT}/books:/books
+    ports: ["8081:8080"]
+
+  calibre-web:
+    profiles: ["calibre-web"]
+    image: lscr.io/linuxserver/calibre-web:latest
+    restart: unless-stopped
+    environment: [PUID=${PUID}, PGID=${PGID}, TZ=${TZ}]
+    volumes:
+      - ./calibre-web/config:/config
+      - ${MEDIA_ROOT}/books:/books
+    ports: ["8083:8083"]
+
+  photoprism:
+    profiles: ["photoprism"]
+    image: photoprism/photoprism:latest
+    restart: unless-stopped
+    environment:
+      - PHOTOPRISM_ADMIN_PASSWORD=${PHOTOPRISM_ADMIN_PASSWORD}
+      - TZ=${TZ}
+    volumes:
+      - ./photoprism/storage:/photoprism/storage
+      - ${MEDIA_ROOT}/photos:/photoprism/originals
+    ports: ["2342:2342"]
+
+  # --- Immich (server + machine + Postgres + Redis) ---
+  immich-server:
+    profiles: ["immich"]
+    image: ghcr.io/immich-app/immich-server:release
+    restart: unless-stopped
+    depends_on: [immich-db, immich-redis]
+    environment:
+      - DB_URL=postgresql://immich:${IMMICH_DB_PASSWORD}@immich-db:5432/immich
+      - REDIS_HOST=immich-redis
+      - TZ=${TZ}
+    volumes:
+      - ./immich/upload:/usr/src/app/upload
+      - ${MEDIA_ROOT}/photos:/usr/src/app/external
+    ports: ["2283:2283"]
+  immich-machine:
+    profiles: ["immich"]
+    image: ghcr.io/immich-app/immich-machine:release
+    restart: unless-stopped
+    environment:
+      - IMMICH_SERVER_URL=http://immich-server:3001
+      - TZ=${TZ}
+    volumes:
+      - ./immich/upload:/usr/src/app/upload
+  immich-db:
+    profiles: ["immich"]
+    image: tensorchord/pgvecto-rs:pg16-v0.2.2
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=immich
+      - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD}
+      - POSTGRES_DB=immich
+      - TZ=${TZ}
+    volumes:
+      - ./immich/db:/var/lib/postgresql/data
+  immich-redis:
+    profiles: ["immich"]
+    image: redis:6-alpine
+    restart: unless-stopped
+    volumes:
+      - ./immich/redis:/data
+

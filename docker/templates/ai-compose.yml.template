@@ -1,4 +1,4 @@
-
+# ai-compose.yml.template
 # AI stack with Compose profiles. Select which to run via COMPOSE_PROFILES in .env
 # Example:
 #   COMPOSE_PROFILES=openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai

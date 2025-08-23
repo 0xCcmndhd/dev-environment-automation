@@ -3,6 +3,7 @@
 # - cookie: true => force cookie entry even if sso is false (e.g., vault)
 domain: lan
 apps:
+  # Utilities
   - name: glance
     sso: true
   - name: code
@@ -11,12 +12,58 @@ apps:
     sso: true
   - name: vault
     sso: false
-    cookie: true   # admin-only is protected in Caddy; cookie is still useful
-  - name: silly
+    cookie: true
+  - name: ntfy
+    sso: true
+  - name: livesync
+    sso: true
+  - name: kiwix
     sso: false
+  - name: privatebin
+    sso: true
+
+  # AI (as in master reference)
   - name: n8n
     sso: true
   - name: comfy
     sso: true
   - name: ooba
     sso: true
+  - name: open
+    sso: false
+  - name: silly
+    sso: false
+
+  # Media
+  - name: sonarr
+    sso: true
+  - name: radarr
+    sso: true
+  - name: prowlarr
+    sso: true
+  - name: lidarr
+    sso: true
+  - name: readarr
+    sso: true
+  - name: bazarr
+    sso: true
+  - name: overseerr
+    sso: true
+  - name: calibre-web
+    sso: true
+  - name: photoprism
+    sso: true
+  - name: immich
+    sso: true
+
+  # Downloads
+  - name: qbittorrent
+    sso: true
+  - name: sab
+    sso: true
+  - name: yt
+    sso: false
+  - name: pinchflat
+    sso: false
+  - name: podgrab
+    sso: false

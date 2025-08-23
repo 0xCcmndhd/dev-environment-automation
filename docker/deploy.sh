@@ -17,15 +17,13 @@ success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
 # These are set once to ensure paths are always correct.
 # ==============================================================================
 # The absolute path to the directory where this script is located.
-readonly SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR_TMP="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+readonly SCRIPT_DIR="${SCRIPT_DIR_TMP}"
 # The path to the templates directory, relative to the script's location.
 readonly TEMPLATES_DIR="$SCRIPT_DIR/templates"
-# The parent directory where all Docker Stacks will be deployed.
-readonly DOCKER_BASE_DIR="$HOME/docker"
+# The parent directory where all Docker Stacks will be deployed (unused; remove or export if needed).
+#readonly DOCKER_BASE_DIR="$HOME/docker"
 
-# ==============================================================================
-# PREREQUISITE: DOCKER INSTALLATION & PERMISSIONS
-# ==============================================================================
 # ==============================================================================
 # PREREQUISITE: DOCKER INSTALLATION & PERMISSIONS
 # ==============================================================================
@@ -49,6 +47,7 @@ ensure_docker() {
             sudo chmod a+r /etc/apt/keyrings/docker.asc
             # Note: The UBUNTU_CODENAME variable is specific to Ubuntu.
             # This logic needs to be robust for other Debian-based distros if needed.
+            # shellcheck source=/etc/os-release
             . /etc/os-release
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
                   ${VERSION_CODENAME} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
@@ -89,27 +88,6 @@ ensure_docker() {
 # These are helper functions that append a single service to the compose file.
 # ==============================================================================
 
-# Appends the Watchtower service block to docker-compose.yml
-add_watchtower_service() {
-    info "  -> Adding Watchtower service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - TZ=${TZ}
-      # Schedule to run every morning at 4 AM.
-      - WATCHTOWER_SCHEDULE=0 0 4 * * *
-      # Automatically clean up old, unused images after an update.
-      - WATCHTOWER_CLEANUP=true
-    command: --include-stopped
-EOF
-}
-
 # Creates the Caddyfile from a template, intentionally overwriting the old one.
 generate_caddyfile() {
     # Use the reliable global variable for the template path
@@ -132,59 +110,12 @@ generate_caddyfile() {
     
     # Source the .env file to load variables, then use envsubst
     set -a
-    # shellcheck source=.env
+    # shellcheck disable=SC1091
     source .env
     set +a
     envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
     
     success "   -> Caddyfile created/updated at $CONFIG_PATH"
-}
-
-# Appends the Caddy service block to docker-compose.yml
-add_caddy_service() {
-    info "  -> Adding Caddy service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  caddy:
-    image: caddy:latest
-    container_name: caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    dns:
-      - ${PIHOLE_PRIMARY_IP}
-      - ${PIHOLE_SECONDARY_IP}
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - ./caddy/data:/data
-      - ./caddy/config:/config
-EOF
-}
-
-# Appends the Glance service block to docker-compose.yml
-add_glance_service() {
-    info "  -> Adding Glance dashboard service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  glance:
-    image: glanceapp/glance:latest
-    container_name: glance
-    restart: unless-stopped
-    # Note: We do not expose ports directly. Caddy will handle access.
-    # ports:
-    #   - "3030:8080"
-    volumes:
-      - ./glance/config:/app/config
-      - ./glance/assets:/app/assets
-      # We need the Docker socket to use the server-stats and containers widget
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - PUID=${PUID} # Add PUID/PGID for good practice
-      - PGID=${PGID}
-      - TZ=${TZ}
-EOF
 }
 
 # Creates the glance.yml config from a template
@@ -208,7 +139,7 @@ generate_glance_config() {
 
     # Source the .env file to load variables, then use envsubst
     set -a
-    # shellcheck source=.env
+    # shellcheck disable=SC1091
     source .env
     set +a
     envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
@@ -236,14 +167,14 @@ generate_authelia_from_template() {
     if [ ! -f "$USERS_DB" ]; then
         warn "Authelia users_database.yml not found. Creating a minimal one for user 'admin'."
         local ADMIN_PASS
-        read -p "Enter password for Authelia admin user 'admin': " -s ADMIN_PASS
+        read -r -s -p "Enter password for Authelia admin user 'admin': " -s ADMIN_PASS
         echo
         if [ -z "$ADMIN_PASS" ]; then
             error "Empty password provided for Authelia admin."
-            return 1
         fi
         info "Hashing admin password (argon2id)..."
         local HASH
+        # shellcheck disable=SC2016
         HASH=$(docker run --rm authelia/authelia:latest authelia crypto hash generate argon2 --password "$ADMIN_PASS" --variant argon2id --iterations 3 --parallelism 4 --memory 65536 | sed 's/^Digest: //' | grep -E '^\$argon2(id|i)\$' | tail -n1)
         cat > "$USERS_DB" <<EOF
 users:
@@ -340,89 +271,6 @@ EOF
     success "Authelia config generated at $OUT_YML"
 }
  
-# New services for Utilities stack
-add_redis_service() {
-    info "  -> Adding Redis service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - ./redis/data:/data
-EOF
-}
-
-add_authelia_service() {
-    info "  -> Adding Authelia service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  authelia:
-    image: authelia/authelia:latest
-    container_name: authelia
-    restart: unless-stopped
-    command: --config /config/configuration.yml
-    depends_on:
-      - redis
-    volumes:
-      - ./authelia/config:/config
-    environment:
-      - TZ=${TZ}
-EOF
-}
-
-add_uptime_kuma_service() {
-    info "  -> Adding Uptime Kuma service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  uptime-kuma:
-    image: louislam/uptime-kuma:1
-    container_name: uptime-kuma
-    restart: unless-stopped
-    volumes:
-      - ./uptime-kuma/data:/app/data
-    environment:
-      - TZ=${TZ}
-EOF
-}
-
-add_vaultwarden_service() {
-    info "  -> Adding Vaultwarden service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  vaultwarden:
-    image: vaultwarden/server:latest
-    container_name: vaultwarden
-    restart: unless-stopped
-    environment:
-      - TZ=${TZ}
-      - WEBSOCKET_ENABLED=true
-    volumes:
-      - ./vaultwarden/data:/data
-EOF
-}
-
-# Appends the code-server service block to docker-compose.yml (optional)
-add_code_server_service() {
-    info "  -> Adding code-server service..."
-    cat >> docker-compose.yml << 'EOF'
-
-  code:
-    image: codercom/code-server:latest
-    container_name: code
-    restart: unless-stopped
-    # No ports exposed; Caddy will reverse proxy internally
-    environment:
-      - TZ=${TZ}
-      - PASSWORD=${CODE_PASSWORD}
-    volumes:
-      - ./code/config:/home/coder/.config
-      - ./code/projects:/home/coder/project
-EOF
-}
-
 generate_ai_compose() {
     # Use the reliable global variable for the template path
     local TEMPLATE_PATH="$TEMPLATES_DIR/ai-compose.yml.template"
@@ -437,7 +285,7 @@ generate_ai_compose() {
 
     # Source the .env file to load variables, then use envsubst
     set -a
-    # shellcheck source=.env
+    # shellcheck disable=SC1091
     source .env
     set +a
     
@@ -474,55 +322,242 @@ install_heavy_mode_script() {
 }
 
 
+# Return 0 if path is a mountpoint or within a mounted fs; 1 otherwise
+is_mounted() {
+  local path="$1"
+  # findmnt -T works on paths with spaces; fall back to mountpoint -q
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -T "$path" >/dev/null 2>&1
+  else
+    mountpoint -q "$path"
+  fi
+}
+
+verify_host_path() {
+  local path="$1"; local want_write="${2:-false}"
+  if [ ! -d "$path" ]; then
+    error "Required path not found: $path"
+  fi
+  if ! is_mounted "$path"; then
+    warn "Path exists but is not a mounted filesystem: $path"
+    warn "If this is a network share, check your fstab or automount config."
+    read -p "Continue anyway? (y/N) " -n 1 -r; echo
+    [[ $REPLY =~ ^[Yy]$ ]] || error "Aborting; mount not present: $path"
+  fi
+  if [ "$want_write" = "true" ]; then
+    local tmp="$path/.compose_write_test_$$"
+    if ! ( set -e; touch "$tmp" && rm -f "$tmp" ); then
+      error "Write test failed at $path. Fix permissions/ACLs or PUID/PGID."
+    fi
+  fi
+}
+
+verify_media_layout() {
+  # Reads MEDIA_ROOT and DL_ROOT from .env
+  set -a; source .env; set +a
+  local mr="${MEDIA_ROOT:-/mnt/truenas/Media}"
+  local dl="${DL_ROOT:-$mr/downloads}"
+
+  info "Verifying media root: $mr"
+  verify_host_path "$mr" false
+
+  # Expected subfolders (adjust to your layout)
+  local subs=("Videos" "Videos/Movies" "Videos/TV Shows" "Music" "Books" "downloads")
+  local missing=()
+  for s in "${subs[@]}"; do
+    if [ ! -d "$mr/$s" ]; then
+      missing+=("$mr/$s")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    warn "Missing expected subfolders:"
+    printf '  - %s\n' "${missing[@]}"
+    read -p "Create them now? (y/N) " -n 1 -r; echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      for m in "${missing[@]}"; do mkdir -p "$m"; done
+      success "Created missing subfolders."
+    else
+      warn "Continuing without creating missing folders."
+    fi
+  fi
+
+  info "Verifying downloads path: $dl (write test)"
+  verify_host_path "$dl" true
+
+  # Optional: check PUID/PGID vs ownership hints
+  if command -v stat >/dev/null 2>&1; then
+    local owner_uid owner_gid
+    owner_uid=$(stat -c '%u' "$dl" 2>/dev/null || echo "")
+    owner_gid=$(stat -c '%g' "$dl" 2>/dev/null || echo "")
+    if [ -n "$owner_uid" ] && [ -n "$PUID" ] && [ "$owner_uid" != "$PUID" ]; then
+      warn "downloads owner uid=$owner_uid differs from PUID=$PUID; ensure ACLs/uid mapping."
+    fi
+    if [ -n "$owner_gid" ] && [ -n "$PGID" ] && [ "$owner_gid" != "$PGID" ]; then
+      warn "downloads owner gid=$owner_gid differs from PGID=$PGID; ensure ACLs/gid mapping."
+    fi
+  fi
+}
 
 # ==============================================================================
 # MAIN COMPOSE FILE GENERATOR
 # This function orchestrates the creation of the final docker-compose.yml.
 # ==============================================================================
 generate_utilities_compose() {
-    # Start with a clean slate by overwriting the file with the header.
-    info "Creating new docker-compose.yml..."
-    echo "services:" > docker-compose.yml
-
-    # Call the helper function for each service we want in this stack.
-    add_watchtower_service
-    add_caddy_service # Example of how we'll add more later
-    add_glance_service # Example
-    add_redis_service
-    add_authelia_service
-    add_uptime_kuma_service
-    add_vaultwarden_service
-
-    # Optionally include code-server service
-    read -p "Include code-server (VS Code in browser)? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        add_code_server_service
+    # New template-driven utilities compose
+    local TEMPLATE_PATH="$TEMPLATES_DIR/utilities-compose.yml.template"
+    local CONFIG_PATH="./docker-compose.yml"
+    if [ ! -f "$TEMPLATE_PATH" ]; then
+        error "Utilities Compose template not found at '$TEMPLATE_PATH'!"
+        return 1
     fi
-
-    # After adding all services, generate configs that depend on them
+    info "  -> Generating Utilities stack docker-compose.yml from template..."
+    set -a; # shellcheck disable=SC1091
+    source .env; set +a
+    envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
     generate_caddyfile
-
-    success "docker-compose.yml generated successfully."
+    success "   -> Utilities docker-compose.yml created at $CONFIG_PATH"
 }
 
-configure_env_file_if_needed() {
-    if [ -f ".env" ]; then
-        warn "An existing .env file was found."
-        read -p "Do you want to re-configure and a new one? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            # Backup the old file before creating a new one
-            mv .env .env.bak.$(date +%Y%m%d-%H%M%S)
-            info "Backed up existing .env file."
-            configure_env_file
-        else
-            info "Using existing .env file."
-        fi
-    else
-        # No .env file exists, so we must create one.
-        configure_env_file
+generate_media_compose() {
+    local TEMPLATE_PATH="$TEMPLATES_DIR/media-compose.yml.template"
+    local CONFIG_PATH="./docker-compose.yml"
+    [ -f "$TEMPLATE_PATH" ] || error "Media Compose template not found at '$TEMPLATE_PATH'!"
+    info "  -> Generating Media stack docker-compose.yml from template..."
+    set -a; shellcheck disable=SC1091
+    source .env; set +a
+    envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
+    success "   -> Media docker-compose.yml created at $CONFIG_PATH"
+}
+
+generate_downloads_compose() {
+    local TEMPLATE_PATH="$TEMPLATES_DIR/downloads-compose.yml.template"
+    local CONFIG_PATH="./docker-compose.yml"
+    [ -f "$TEMPLATE_PATH" ] || error "Downloads Compose template not found at '$TEMPLATE_PATH'!"
+    info "  -> Generating Downloads stack docker-compose.yml from template..."
+    set -a; shellcheck disable=SC1091
+    source .env; set +a
+    envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
+    success "   -> Downloads docker-compose.yml created at $CONFIG_PATH"
+}
+
+# --- .env helpers (idempotent, in-place editing) ---
+ensure_env_file_present() {
+  [ -f ".env" ] && return 0
+  info "No .env found; creating an empty one."
+  : > .env
+}
+
+get_env() {
+  # prints value if KEY=VAL exists; empty otherwise
+  local key="$1"
+  grep -E "^${key}=" .env | sed -E "s/^${key}=//" | tail -n1
+}
+
+upsert_env() {
+  # upsert KEY=VALUE (no quotes added; pass pre-quoted if needed)
+  local key="$1" val="$2"
+  if grep -qE "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key}=${val}|" .env
+  else
+    echo "${key}=${val}" >> .env
+  fi
+}
+
+prompt_env() {
+  # prompt_env KEY "Prompt text" "fallback_default"
+  local key="$1" prompt="$2" fallback="$3"
+  local cur; cur="$(get_env "$key")"
+  local def="${cur:-$fallback}"
+  read -r -e -i "$def" -p "$prompt " val
+  upsert_env "$key" "$val"
+}
+
+prompt_env_secret() {
+  # prompt_env_secret KEY "Prompt text (leave blank to keep current)" required(true/false)
+  local key="$1" prompt="$2" required="${3:-false}"
+  local cur; cur="$(get_env "$key")"
+  local val=""
+  read -r -s -p "$prompt " val; echo
+  if [ -z "$val" ]; then
+    if [ "$required" = "true" ] && [ -z "$cur" ]; then
+      error "A value is required for $key."
     fi
+    [ -n "$cur" ] && return 0  # keep existing
+  fi
+  upsert_env "$key" "$val"
+}
+
+ensure_env_basics() {
+  ensure_env_file_present
+  warn "---[ General Settings ]---"
+  prompt_env TZ "Timezone (e.g., America/New_York):" "America/New_York"
+  prompt_env LOCAL_DOMAIN "Primary local domain (lan/home.arpa):" "lan"
+  prompt_env GLANCE_WEATHER_LOCATION "City for weather widget:" "Philadelphia"
+
+  warn "---[ User and Group IDs ]---"
+  prompt_env PUID "PUID (container user id):" "1000"
+  prompt_env PGID "PGID (container group id):" "1000"
+
+  warn "---[ Infra IPs & DNS ]---"
+  prompt_env PROXMOX_IP "Proxmox IP:" ""
+  prompt_env UNIFI_IP "UniFi IP:" ""
+  prompt_env TRUENAS_IP "TrueNAS IP:" ""
+  prompt_env PIHOLE_PRIMARY_IP "Pi-hole PRIMARY IP:" ""
+  prompt_env PIHOLE_SECONDARY_IP "Pi-hole SECONDARY IP:" ""
+  prompt_env_secret PIHOLE_PASSWORD "Pi-hole Web UI password (leave blank to keep current):" false
+
+  warn "---[ Service VM IPs ]---"
+  prompt_env AI_SERVER_IP "AI Server VM IP:" ""
+  prompt_env MEDIA_SERVER_IP "Media Server VM IP:" ""
+  prompt_env DOWNLOADS_SERVER_IP "Downloads Server VM IP:" ""
+}
+
+ensure_env_utilities_extras() {
+  warn "---[ Utilities extras ]---"
+  prompt_env CODE_PASSWORD "code-server password:" "changeme"
+  local _ld; _ld="$(get_env LOCAL_DOMAIN)"; _ld="${_ld:-lan}"
+  prompt_env NTFY_BASE_URL "ntfy base URL:" "https://ntfy.${_ld}"
+  prompt_env LIVESYNC_COUCHDB_USER "Obsidian LiveSync CouchDB user:" "obsidian"
+  prompt_env_secret LIVESYNC_COUCHDB_PASSWORD "CouchDB password (leave blank to keep current):" false
+
+  # Optional YOURLS
+  read -p "Configure YOURLS now? (y/N) " -n 1 -r; echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    prompt_env YOURLS_SITE "YOURLS site URL:" "https://links.${_ld}"
+    prompt_env YOURLS_USER "YOURLS admin user:" "admin"
+    prompt_env_secret YOURLS_PASS "YOURLS admin password (leave blank to keep current):" false
+    prompt_env_secret YOURLS_DB_PASS "YOURLS DB password (leave blank to keep current):" false
+    prompt_env_secret YOURLS_DB_ROOT_PASS "YOURLS DB root password (leave blank to keep current):" false
+  fi
+}
+
+ensure_env_media_extras() {
+  warn "---[ Media paths & app secrets ]---"
+  # Defaults reflect your layout
+  prompt_env MEDIA_ROOT "MEDIA_ROOT (host path):" "/mnt/truenas/02 - Media"
+  prompt_env DL_ROOT "DL_ROOT (host path to downloads):" "/mnt/truenas/02 - Media/downloads"
+  prompt_env_secret PLEX_CLAIM "PLEX_CLAIM (leave blank if not using Plex):" false
+  prompt_env_secret PHOTOPRISM_ADMIN_PASSWORD "Photoprism admin password (blank to keep):" false
+  prompt_env_secret IMMICH_DB_PASSWORD "Immich DB password (blank to keep):" false
+}
+
+ensure_env_downloads_extras() {
+  warn "---[ Downloads paths & Gluetun ]---"
+  prompt_env DL_ROOT "DL_ROOT (host path to downloads):" "/mnt/truenas/02 - Media/downloads"
+  prompt_env GLUETUN_VPN_SERVICE_PROVIDER "VPN provider:" "mullvad"
+  prompt_env GLUETUN_VPN_TYPE "VPN type:" "wireguard"
+  prompt_env_secret GLUETUN_WG_PRIVATE_KEY "WireGuard private key (blank to keep):" false
+  prompt_env GLUETUN_SERVER_CITIES "VPN server city:" "Stockholm"
+}
+
+configure_stack_profiles() {
+  local STACK="$1"; shift
+  local DEFAULTS="$*"
+  local current
+  current=$(get_env COMPOSE_PROFILES)
+  warn "---[ $STACK stack profiles ]---"
+  read -r -e -i "${current:-$DEFAULTS}" -p "Enter COMPOSE_PROFILES (comma-separated) for $STACK: " PROFILES
+  upsert_env COMPOSE_PROFILES "$PROFILES"
 }
 
 prepare_service_directories() {
@@ -576,64 +611,6 @@ prepare_service_directories() {
     success "All service directories prepared."
 }
 
-configure_env_file() {
-    warn "Configuring environment variables for all stacks..."
-    echo "This will create a secure '.env' file to store your settings."
-    
-    # --- General ---
-    warn "---[ General Settings ]---"
-    read -p "Enter your TimeZone (e.g., America/New_York): " -i "America/New_York" -e TZ
-    read -p "Enter your primary local domain (e.g., lan, home.arpa): " -i "lan" -e LOCAL_DOMAIN
-    read -p "Enter your city for the weather widget: " -i "Philadelphia" -e GLANCE_WEATHER_LOCATION
-
-    # --- User/Group IDs ---
-    warn "---[ User and Group IDs ]---"
-    read -p "Enter the User ID (PUID) for containers: " -i "1000" -e PUID
-    read -p "Enter the Group ID (PGID) for containers: " -i "1000" -e PGID
-
-    # --- Infrastructure IPs ---
-    warn "---[ Infrastructure IP Addresses & Secrets ]---"
-    read -p "Enter the IP address of your Proxmox host: " -e PROXMOX_IP
-    read -p "Enter the IP address of your UniFi Controller: " -e UNIFI_IP
-    read -p "Enter the IP address of your TrueNAS server: " -e TRUENAS_IP
-    read -p "Enter the IP of your PRIMARY Pi-hole (Proxmox CT): " -e PIHOLE_PRIMARY_IP
-    read -p "Enter the IP of your SECONDARY Pi-hole (Raspberry Pi): " -e PIHOLE_SECONDARY_IP
-    read -p "Enter the Web UI password for Pi-hole: " -s PIHOLE_PASSWORD
-    echo "" # Add a newline after the sensitive password input
-    
-    # --- Server IPs ---
-    warn "---[ Service VM IP Addresses ]---"
-    read -p "Enter the IP of your AI Server VM: " -e AI_SERVER_IP
-    read -p "Enter the IP of your Media Server VM: " -e MEDIA_SERVER_IP
-    read -p "Enter the IP of your Downloads Server VM: " -e DOWNLOADS_SERVER_IP
-    # Add more prompts here for Media, Downloads VMs as you build those stacks
-
-    info "Writing all settings to .env file..."
-    cat > .env << EOF
-# --- General Settings ---
-TZ=${TZ}
-LOCAL_DOMAIN=${LOCAL_DOMAIN}
-PUID=${PUID}
-PGID=${PGID}
-
-# --- Glance Widget Settings ---
-GLANCE_WEATHER_LOCATION=${GLANCE_WEATHER_LOCATION}
-
-# --- Infrastructure IPs & Secrets ---
-PROXMOX_IP=${PROXMOX_IP}
-UNIFI_IP=${UNIFI_IP}
-TRUENAS_IP=${TRUENAS_IP}
-PIHOLE_PRIMARY_IP=${PIHOLE_PRIMARY_IP}
-PIHOLE_SECONDARY_IP=${PIHOLE_SECONDARY_IP}
-PIHOLE_PASSWORD=${PIHOLE_PASSWORD}
-
-# --- Service VM IPs ---
-AI_SERVER_IP=${AI_SERVER_IP}
-MEDIA_SERVER_IP=${MEDIA_SERVER_IP}
-DOWNLOADS_SERVER_IP=${DOWNLOADS_SERVER_IP}
-EOF
-    success ".env file created securely."
-}
 
 # Optional: AI-specific env additions for profiles and model paths
 configure_ai_env_overrides() {
@@ -648,13 +625,13 @@ configure_ai_env_overrides() {
     echo "  - tts-openedai (OpenAI-compatible TTS)"
     echo "  - watchtower   (auto-updates on AI host)"
     local DEFAULT_PROFILES="openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai"
-    read -e -i "$DEFAULT_PROFILES" -p "Enter COMPOSE_PROFILES (comma-separated): " AI_PROFILES
+    read -r -e -i "$DEFAULT_PROFILES" -p "Enter COMPOSE_PROFILES (comma-separated): " AI_PROFILES
 
     # Paths with defaults
     local DEFAULT_OLLAMA_DIR="/opt/models"
-    read -e -i "$DEFAULT_OLLAMA_DIR" -p "Path to Ollama models dir: " OLLAMA_MODELS_DIR
-    read -e -p "Path to llama.cpp models dir (bind mount) [optional]: " LLAMACPP_MODELS_DIR
-    read -e -p "llama.cpp GGUF full path (LLAMACPP_MODEL_PATH) [optional]: " LLAMACPP_MODEL_PATH
+    read -r -e -i "$DEFAULT_OLLAMA_DIR" -p "Path to Ollama models dir: " OLLAMA_MODELS_DIR
+    read -r -e -p "Path to llama.cpp models dir (bind mount) [optional]: " LLAMACPP_MODELS_DIR
+    read -r -e -p "llama.cpp GGUF full path (LLAMACPP_MODEL_PATH) [optional]: " LLAMACPP_MODEL_PATH
 
     # Update or append keys in .env idempotently
     grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${AI_PROFILES}|" .env || echo "COMPOSE_PROFILES=${AI_PROFILES}" >> .env
@@ -719,7 +696,11 @@ compute_ai_dirs_from_profiles() {
   local IFS=','; read -ra profs <<< "$profiles_csv"
   local out=()
   for p in "${profs[@]}"; do
-    [ -n "${map[$p]}" ] && out+=(${map[$p]})
+    if [ -n "${map[$p]}" ]; then
+      # split map value into words safely
+      read -r -a words <<< "${map[$p]}"
+      out+=("${words[@]}")
+    fi
   done
   printf '%s\n' "${out[@]}"
 }
@@ -729,7 +710,7 @@ deploy_stack() {
     # Export .env so COMPOSE_PROFILES and others affect compose behavior
     if [ -f ".env" ]; then
         set -a
-        # shellcheck source=/dev/null
+        # shellcheck disable=SC1091
         source .env
         set +a
     fi
@@ -794,21 +775,25 @@ main_menu() {
  It is designed to be idempotent and secure. For more information,
  see the project README.
 =====================================================================
-Last Docker Documentation Review: 2024-07-31
+Last Docker Documentation Review: 2025-08-23
 ---------------------------------------------------------------------
 EOF
     echo ""
     echo "Select a service stack to manage:"
-    echo "  1) Utilities (Caddy, Watchtower, Glance, etc.)"
-    echo "  2) AI (Open Webui, Sillytavern)"
+    echo "  1) Utilities (Caddy, Authelia, Glance, etc.)"
+    echo "  2) AI (Open WebUI, SillyTavern, etc.)"
+    echo "  3) Media (Arr, Jellyfin/Plex, Overseerr, etc.)"
+    echo "  4) Downloads (qBittorrent, SAB, yt-dlp, Pinchflat, etc.)"
     echo ""
     echo "  q) Quit"
     echo ""
-    read -p "Enter your choice: " stack_choice
+    read -r -p "Enter your choice: " stack_choice
 
     case "$stack_choice" in
         1) manage_stack "utilities" ;;
         2) manage_stack "ai" ;;
+        3) manage_stack "media" ;;
+        4) manage_stack "downloads" ;;
         q) exit 0 ;;
         *) error "Invalid choice. Please try again." ;;
     esac
@@ -826,7 +811,7 @@ manage_stack() {
     echo "  3) Clean Up / Uninstall Stack"
     echo "  b) Back to Main Menu"
     echo ""
-    read -p "Enter your action: " action_choice
+    read -r -p "Enter your action: " action_choice
 
     case "$action_choice" in
         1)
@@ -835,9 +820,9 @@ manage_stack() {
             mkdir -p "$DEPLOY_PATH"
             cd "$DEPLOY_PATH" || exit
 
-            # Always ensure a base .env exists
-            configure_env_file_if_needed
-
+            # Env base handlers
+            ensure_env_file_present
+            ensure_env_basics
             if [ "$STACK_NAME" == "ai" ]; then
                 # Collect AI-specific env and ensure host model dirs exist
                 configure_ai_env_overrides
@@ -851,19 +836,31 @@ manage_stack() {
                     profiles="openwebui,ollama,watchtower"
                     grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profiles}|" .env || echo "COMPOSE_PROFILES=${profiles}" >> .env
                 fi
-                AI_DIRS=($(compute_ai_dirs_from_profiles "$profiles"))
+                mapfile -t AI_DIRS < <(compute_ai_dirs_from_profiles "$profiles")
                 prepare_service_directories "$STACK_NAME" "${AI_DIRS[@]}"
                 write_llamacpp_assets
                 ensure_llamacpp_env_defaults
                 # Generate AI compose
                 generate_ai_compose
                 install_heavy_mode_script
-            else
-                # Utilities flow: prepare dirs and configs
-                prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
+            elif [ "$STACK_NAME" == "utilities" ]; then
+                configure_stack_profiles "utilities" "core,watchtower,code,ntfy"
+                prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden ntfy couchdb kiwix privatebin
+                ensure_env_utilities_extras
                 generate_utilities_compose
                 generate_glance_config
                 generate_authelia_from_template
+            elif [ "$STACK_NAME" == "media" ]; then
+                configure_stack_profiles "media" "arr,jellyfin,overseerr,watchtower"
+                prepare_service_directories "$STACK_NAME" prowlarr sonarr radarr lidarr readarr bazarr jellyfin plex overseerr audiobookshelf calibre calibre-web photoprism immich
+                ensure_env_media_extras
+                verify_media_layout
+                generate_media_compose
+            elif [ "$STACK_NAME" == "downloads" ]; then
+                configure_stack_profiles "downloads" "vpn,qbittorrent,sabnzbd,yt-dlp,pinchflat,podgrab,watchtower"
+                prepare_service_directories "$STACK_NAME" gluetun qbittorrent sabnzbd yt-dlp podgrab pinchflat watchtower
+                ensure_env_downloads_extras
+                generate_downloads_compose
             fi
 
             # Deploy stack
@@ -876,7 +873,8 @@ manage_stack() {
             cd "$DEPLOY_PATH" || exit
 
             # Ensure .env exists
-            configure_env_file_if_needed
+            ensure_env_file_present
+            ensure_env_basics
 
             if [ "$STACK_NAME" == "ai" ]; then
                 # Collect AI env and ensure dirs
@@ -889,15 +887,28 @@ manage_stack() {
                     profiles="openwebui,ollama,watchtower"
                     grep -q '^COMPOSE_PROFILES=' .env && sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profiles}|" .env || echo "COMPOSE_PROFILES=${profiles}" >> .env
                 fi
-                AI_DIRS=($(compute_ai_dirs_from_profiles "$profiles"))
+                mapfile -t AI_DIRS < <(compute_ai_dirs_from_profiles "$profiles")
                 prepare_service_directories "$STACK_NAME" "${AI_DIRS[@]}"
 
                 generate_ai_compose
-            else
+            elif [ "$STACK_NAME" == "utilities" ]; then
+                configure_stack_profiles "utilities" "core,watchtower,code"
                 prepare_service_directories "$STACK_NAME" caddy glance watchtower code authelia redis uptime-kuma vaultwarden
+                ensure_env_utilities_extras
                 generate_utilities_compose
                 generate_glance_config
                 generate_authelia_from_template
+            elif [ "$STACK_NAME" == "media" ]; then
+                configure_stack_profiles "media" "arr,jellyfin,overseerr,watchtower"
+                prepare_service_directories "$STACK_NAME" prowlarr sonarr radarr lidarr readarr bazarr jellyfin overseerr
+                ensure_env_media_extras
+                verify_media_layout
+                generate_media_compose
+            elif [ "$STACK_NAME" == "downloads" ]; then
+                configure_stack_profiles "downloads" "vpn,qbittorrent,sabnzbd,yt-dlp,pinchflat,podgrab,watchtower"
+                prepare_service_directories "$STACK_NAME" gluetun qbittorrent sabnzbd yt-dlp podgrab pinchflat watchtower
+                ensure_env_downloads_extras
+                generate_downloads_compose
             fi
 
             success "All configuration files have been generated in '$DEPLOY_PATH'."

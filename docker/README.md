@@ -128,6 +128,30 @@ AI:
 
 ---
 
+## Preflight checks (built into deployer)
+
+Before writing Compose files and deploying, the script performs targeted preflights:
+
+- Docker availability and permissions
+  - Installs Docker Engine if missing and ensures your user is in the `docker` group.
+
+- Media stack: TrueNAS share checks
+  - Verifies MEDIA_ROOT exists and is a mounted filesystem (findmnt -T).
+  - Ensures expected subfolders (Videos/Movies, Videos/TV Shows, Music, Books, downloads) exist and offers to create missing ones.
+  - Verifies DL_ROOT is writeable by your PUID/PGID (creates/removes a temp file).
+
+- Utilities stack: config generation
+  - Renders Caddyfile, Glance, and Authelia from templates (secrets preserved across regenerations).
+
+- Downloads stack: Gluetun pattern
+  - qBittorrent runs with `network_mode: "container:gluetun"`; the Web UI is exposed on the Gluetun container.
+  - Optional: Route SABnzbd/yt-dlp/Pinchflat/Podgrab via VPN by moving their port mappings to Gluetun and using `network_mode: container:gluetun`.
+
+Tip: There’s also a quick smoke test for Utilities:
+`./quick-check-utilities.sh`
+It validates Caddy/Authelia configs and does SNI checks via Caddy.
+
+---
 ## Notes and tips
 
 - GPU access requires NVIDIA Container Toolkit. Test: `docker run --rm --gpus all nvidia/cuda:12.3.2-base nvidia-smi`

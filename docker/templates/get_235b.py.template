@@ -1,3 +1,4 @@
+#get_235b.py.template
 #may want to run pip install huggingface_hub first if missing, requires python3
 import os
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"

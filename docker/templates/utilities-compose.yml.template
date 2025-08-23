@@ -1,0 +1,227 @@
+# Utilities stack — profile-driven
+# Example COMPOSE_PROFILES:
+#   core,watchtower,code,ntfy,livesync,kiwix,privatebin,it-tools,fail2ban,rustdesk,yourls
+#
+# Notes:
+# - Caddy is the only ingress; remove nginx. Authelia SSO model uses per-app portals.
+# - Fail2ban in a container is limited; host-level or CrowdSec is preferable. Included here for convenience.
+# - Rustdesk server (hbbs/hbbr) exposes UDP/TCP 21115-21119; not proxied via Caddy.
+# - CouchDB is used for Obsidian LiveSync.
+
+services:
+  # --- Infra & core ---
+  watchtower:
+    profiles: ["watchtower"]
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=${TZ}
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_CLEANUP=true
+
+  caddy:
+    profiles: ["core"]
+    image: caddy:latest
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    dns:
+      - ${PIHOLE_PRIMARY_IP}
+      - ${PIHOLE_SECONDARY_IP}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy/data:/data
+      - ./caddy/config:/config
+      - ./caddy/logs:/var/log/caddy
+
+  redis:
+    profiles: ["core"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redis/data:/data
+
+  authelia:
+    profiles: ["core"]
+    image: authelia/authelia:latest
+    restart: unless-stopped
+    command: --config /config/configuration.yml
+    depends_on:
+      - redis
+    volumes:
+      - ./authelia/config:/config
+    environment:
+      - TZ=${TZ}
+
+  glance:
+    profiles: ["core"]
+    image: glanceapp/glance:latest
+    restart: unless-stopped
+    volumes:
+      - ./glance/config:/app/config
+      - ./glance/assets:/app/assets
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - TZ=${TZ}
+      - PUID=${PUID}
+      - PGID=${PGID}
+
+  uptime-kuma:
+    profiles: ["core"]
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    volumes:
+      - ./uptime-kuma/data:/app/data
+    environment:
+      - TZ=${TZ}
+
+  vaultwarden:
+    profiles: ["core"]
+    image: vaultwarden/server:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      # Recommended hardening (set in .env):
+      # - DOMAIN
+      # - ADMIN_TOKEN
+      # - SIGNUPS_ALLOWED=false
+      # - IP_HEADER=X-Forwarded-For
+      # - EXTENDED_LOGGING=true
+      # - ROCKET_PORT=80
+    env_file:
+      - ./vaultwarden/vaultwarden.env
+    volumes:
+      - ./vaultwarden/data:/data
+
+  code:
+    profiles: ["code"]
+    image: codercom/code-server:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - PASSWORD=${CODE_PASSWORD}
+    volumes:
+      - ./code/config:/home/coder/.config
+      - ./code/projects:/home/coder/project
+
+  # --- Notifications ---
+  ntfy:
+    profiles: ["ntfy"]
+    image: binwiederhier/ntfy:latest
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - NTFY_BASE_URL=${NTFY_BASE_URL:-https://ntfy.${LOCAL_DOMAIN}}
+      - NTFY_AUTH_DEFAULT_ACCESS=deny
+    volumes:
+      - ./ntfy/cache:/var/cache/ntfy
+      - ./ntfy/etc:/etc/ntfy
+
+  # --- Obsidian LiveSync (CouchDB) ---
+  couchdb:
+    profiles: ["livesync"]
+    image: couchdb:3
+    restart: unless-stopped
+    environment:
+      - COUCHDB_USER=${LIVESYNC_COUCHDB_USER}
+      - COUCHDB_PASSWORD=${LIVESYNC_COUCHDB_PASSWORD}
+    volumes:
+      - ./couchdb/data:/opt/couchdb/data
+      - ./couchdb/etc:/opt/couchdb/etc
+
+  # --- Kiwix offline content server ---
+  kiwix:
+    profiles: ["kiwix"]
+    image: kiwix/kiwix-serve:latest
+    restart: unless-stopped
+    command: ["-p", "8080", "/data"]
+    volumes:
+      - ./kiwix/zims:/data:ro
+
+  # --- PrivateBin ---
+  privatebin:
+    profiles: ["privatebin"]
+    image: privatebin/nginx-fpm-alpine
+    restart: unless-stopped
+    volumes:
+      - ./privatebin/data:/srv/data
+      - ./privatebin/cfg:/srv/cfg
+    environment:
+      - TZ=${TZ}
+
+  # --- IT-Tools ---
+  it-tools:
+    profiles: ["it-tools"]
+    image: corentinth/it-tools:latest
+    restart: unless-stopped
+
+  # --- Rustdesk server (not proxied via Caddy) ---
+  hbbs:
+    profiles: ["rustdesk"]
+    image: rustdesk/rustdesk-server:latest
+    restart: unless-stopped
+    command: hbbs -r 0.0.0.0:21117
+    ports:
+      - "21115:21115"
+      - "21116:21116"
+      - "21117:21117"
+    volumes:
+      - ./rustdesk/data:/root
+  hbbr:
+    profiles: ["rustdesk"]
+    image: rustdesk/rustdesk-server:latest
+    restart: unless-stopped
+    command: hbbr
+    ports:
+      - "21118:21118"
+      - "21119:21119"
+    volumes:
+      - ./rustdesk/data:/root
+
+  # --- Optional: YOURLS (with MariaDB) ---
+  yourls:
+    profiles: ["yourls"]
+    image: yourls:latest
+    restart: unless-stopped
+    environment:
+      - YOURLS_SITE=${YOURLS_SITE:-https://links.${LOCAL_DOMAIN}}
+      - YOURLS_USER=${YOURLS_USER:-admin}
+      - YOURLS_PASS=${YOURLS_PASS}
+      - YOURLS_DB_HOST=yourls-db
+      - YOURLS_DB_USER=yourls
+      - YOURLS_DB_PASS=${YOURLS_DB_PASS}
+      - YOURLS_DB_NAME=yourls
+    depends_on:
+      - yourls-db
+  yourls-db:
+    profiles: ["yourls"]
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      - MARIADB_DATABASE=yourls
+      - MARIADB_USER=yourls
+      - MARIADB_PASSWORD=${YOURLS_DB_PASS}
+      - MARIADB_ROOT_PASSWORD=${YOURLS_DB_ROOT_PASS}
+    volumes:
+      - ./yourls/db:/var/lib/mysql
+
+  # --- Fail2ban (container variant; prefer host install if possible) ---
+  fail2ban:
+    profiles: ["fail2ban"]
+    image: crazymax/fail2ban:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./caddy/logs:/var/log/caddy:ro
+      - ./fail2ban/data:/data
+      - ./fail2ban/etc:/etc/fail2ban
+    environment:
+      - TZ=${TZ}

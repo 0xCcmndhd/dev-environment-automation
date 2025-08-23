@@ -1,3 +1,4 @@
+# glance.yml.template
 # Glance Configuration Template
 # This file is processed by deploy.sh to generate the final glance.yml.
 
