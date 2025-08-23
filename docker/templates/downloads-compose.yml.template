@@ -98,20 +98,25 @@ services:
     # Then expose 8070 on gluetun's 'ports'.
 
   # --- yt-dlp web UI (direct by default; optionally via VPN) ---
-  yt-dlp-web-ui:
+  yt-dlp-webui:
     profiles: ["yt-dlp"]
-    image: ghcr.io/kmb32123/yt-dlp-web-ui:latest
-    container_name: yt-dlp-web-ui
+    image: marcobaobao/yt-dlp-webui:latest
+    container_name: yt-dlp-webui
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3033/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./yt-dlp/config:/config
+      - "${DL_ROOT}:/downloads"
+    ports:
+      - "3033:3033"
     environment:
       - TZ=${TZ}
       - AUDIO_DOWNLOADS=${DL_ROOT}/audio
       - VIDEO_DOWNLOADS=${DL_ROOT}/video
-    volumes:
-      - ./yt-dlp/config:/config
-      - ${DL_ROOT}:/downloads
-    ports:
-      - "8484:8080"
     # Route via VPN:
     # depends_on: [gluetun]
     # network_mode: "container:gluetun"
@@ -120,7 +125,7 @@ services:
   # --- Pinchflat (direct by default; optionally via VPN) ---
   pinchflat:
     profiles: ["pinchflat"]
-    image: ghcr.io/karec/pinchflat:latest
+    image: ghcr.io/kieraneglin/pinchflat:latest
     container_name: pinchflat
     restart: unless-stopped
     environment:

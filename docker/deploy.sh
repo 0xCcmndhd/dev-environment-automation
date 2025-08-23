@@ -434,7 +434,7 @@ generate_downloads_compose() {
     local CONFIG_PATH="./docker-compose.yml"
     [ -f "$TEMPLATE_PATH" ] || error "Downloads Compose template not found at '$TEMPLATE_PATH'!"
     info "  -> Generating Downloads stack docker-compose.yml from template..."
-    set -a; shellcheck disable=SC1091
+    set -a; # shellcheck disable=SC1091
     source .env; set +a
     envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
     success "   -> Downloads docker-compose.yml created at $CONFIG_PATH"
