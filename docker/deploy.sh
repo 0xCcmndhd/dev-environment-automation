@@ -167,7 +167,7 @@ generate_authelia_from_template() {
     if [ ! -f "$USERS_DB" ]; then
         warn "Authelia users_database.yml not found. Creating a minimal one for user 'admin'."
         local ADMIN_PASS
-        read -r -s -p "Enter password for Authelia admin user 'admin': " -s ADMIN_PASS
+        read -r -s -p "Enter password for Authelia admin user 'admin': " ADMIN_PASS
         echo
         if [ -z "$ADMIN_PASS" ]; then
             error "Empty password provided for Authelia admin."
@@ -423,7 +423,7 @@ generate_media_compose() {
     local CONFIG_PATH="./docker-compose.yml"
     [ -f "$TEMPLATE_PATH" ] || error "Media Compose template not found at '$TEMPLATE_PATH'!"
     info "  -> Generating Media stack docker-compose.yml from template..."
-    set -a; shellcheck disable=SC1091
+    set -a; # shellcheck disable=SC1091
     source .env; set +a
     envsubst < "$TEMPLATE_PATH" > "$CONFIG_PATH"
     success "   -> Media docker-compose.yml created at $CONFIG_PATH"
