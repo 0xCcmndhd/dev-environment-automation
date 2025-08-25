@@ -4,7 +4,7 @@
 # An interactive script to securely deploy and manage containerized service stacks.
 
 # --- Safety First: Exit on any error ---
-set -e
+set -euo pipefail
 
 # --- Logging Functions ---
 info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
@@ -150,19 +150,41 @@ generate_glance_config() {
 generate_authelia_from_template() {
     local CONFIG_DIR="./authelia/config"
     local TEMPLATE_PATH="$TEMPLATES_DIR/authelia/configuration.yml.template"
-    local APPS_YML="$TEMPLATES_DIR/authelia/apps.yml"
+    # Host and container paths for apps.yml
+    local APPS_YML_HOST="$TEMPLATES_DIR/authelia/apps.yml"
+    local APPS_YML_CONT="/templates/authelia/apps.yml"
+#    local APPS_YML="$TEMPLATES_DIR/authelia/apps.yml"
     local OUT_YML="${CONFIG_DIR}/configuration.yml"
     local USERS_DB="${CONFIG_DIR}/users_database.yml"
 
     mkdir -p "$CONFIG_DIR"
 
+    # Helper: robust backup with sudo fallback
+    backup_file() {
+      local src="$1"; local ts
+      ts="$(date +%Y%m%d-%H%M%S)"
+      local dst="${src}.bak.${ts}"
+      [ -f "$src" ] || return 0
+      if mv "$src" "$dst"; then
+        return 0
+      fi
+      warn "mv failed for $src; trying sudo mv..."
+      if sudo mv "$src" "$dst"; then
+        return 0
+      fi
+      warn "sudo mv failed; trying sudo cp -a + rm..."
+      sudo cp -a "$src" "$dst" && sudo rm -f "$src" || error "Failed to backup $src"
+    }
+
     # Ensure yq via Docker (no host dep)
     run_yq() {
         docker run --rm -i \
+          -e DOMAIN="${DOMAIN:-${LOCAL_DOMAIN:-lan}}" \
           -v "$PWD":/work -w /work \
-          ghcr.io/mikefarah/yq:latest "$@"
+          -v "$TEMPLATES_DIR":/templates:ro \
+          ghcr.io/mikefarah/yq:latest e "$@"
     }
-
+    [ -f "$APPS_YML_HOST" ] || error "Missing $APPS_YML_HOST"
     # 1) Minimal users DB if missing
     if [ ! -f "$USERS_DB" ]; then
         warn "Authelia users_database.yml not found. Creating a minimal one for user 'admin'."
@@ -190,77 +212,91 @@ EOF
     fi
 
     # 2) Read domain from apps.yml (authoritative)
-    if [ ! -f "$APPS_YML" ]; then
-        error "Missing $APPS_YML"
+    if [ ! -f "$APPS_YML_HOST" ]; then
+        error "Missing $APPS_YML_HOST"
         return 1
     fi
     local DOMAIN
-    DOMAIN=$(run_yq -r '.domain' "$APPS_YML")
+    DOMAIN=$(run_yq -r '.domain' "$APPS_YML_CONT")
     [ -z "$DOMAIN" ] && DOMAIN="${LOCAL_DOMAIN:-lan}"
 
     # 3) Preserve secrets if config exists
-    local SESSION_SECRET STORAGE_KEY RESET_JWT
+    local SESSION_SECRET="" STORAGE_KEY="" RESET_JWT=""
     if [ -f "$OUT_YML" ]; then
         info "Preserving existing Authelia secrets."
+        # Make sure we can read the file even if owned by root
+        if [ ! -r "$OUT_YML" ]; then
+          sudo chmod a+r "$OUT_YML" 2>/dev/null || true
+        fi
         SESSION_SECRET=$(awk '$1=="session:"{ins=1;next} ins && $1=="secret:"{print $2; ins=0}' "$OUT_YML")
         STORAGE_KEY=$(awk '$1=="storage:"{ins=1;next} ins && $1=="encryption_key:"{print $2; ins=0}' "$OUT_YML")
         RESET_JWT=$(awk '$1=="identity_validation:"{ins=1;next} ins && $1=="jwt_secret:"{print $2; ins=0}' "$OUT_YML")
-        mv "$OUT_YML" "${OUT_YML}.bak.$(date +%Y%m%d-%H%M%S)"
+        # Ensure directory is writable, then backup with fallback
+        sudo chown -R "$(id -u)":"$(id -g)" "$CONFIG_DIR" 2>/dev/null || true
+        backup_file "$OUT_YML"
     fi
     # Fallback secrets if any missing
     gen_b64() { openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64; }
-    [ -z "$SESSION_SECRET" ] && SESSION_SECRET=$(gen_b64)
-    [ -z "$STORAGE_KEY" ] && STORAGE_KEY=$(gen_b64)
-    [ -z "$RESET_JWT" ] && RESET_JWT=$(gen_b64)
+    [ -z "${SESSION_SECRET:-}" ] && SESSION_SECRET=$(gen_b64)
+    [ -z "${STORAGE_KEY:-}" ] && STORAGE_KEY=$(gen_b64)
+    [ -z "${RESET_JWT:-}" ] && RESET_JWT=$(gen_b64)
 
-    # 4) Build cookies list (apps with sso==true or cookie==true)
-    local COOKIES
-    COOKIES=$(DOMAIN="$DOMAIN" run_yq -P '
-      .apps
-      | map(select((has("sso") and .sso == true) or (has("cookie") and .cookie == true))
-        | {
-            name: ("authelia_" + .name),
-            domain: (.name + "." + env(DOMAIN)),
-            authelia_url: ("https://auth." + .name + "." + env(DOMAIN)),
-            default_redirection_url: ("https://" + .name + "." + env(DOMAIN)),
-            same_site: "lax",
-            expiration: "1h",
-            inactivity: "5m",
-            remember_me: "1M"
-          }
-      )
-    ' "$APPS_YML" | sed 's/^/    /')
+    # 4) Build app names list then compose YAML in bash (robust with -euo pipefail)
+    local APP_NAMES
+    APP_NAMES=$(run_yq -r '.apps[] | select((.sso // false) or (.cookie // false)) | .name' "$APPS_YML_CONT")
+    if [ -z "${APP_NAMES:-}" ]; then
+        error "No apps matched in apps.yml to build Authelia cookies/domains."
+    fi
 
-    # 5) Build access_control rule domain list
-    local DOMAINS
-    DOMAINS=$(DOMAIN="$DOMAIN" run_yq -P '
-      .apps
-      | map(select((has("sso") and .sso == true) or (has("cookie") and .cookie == true))
-        | .name + "." + env(DOMAIN)
-      )
-    ' "$APPS_YML" | sed 's/^/      /')
+    # 4a) Build the cookies YAML block
+    local COOKIES=""
+    while IFS= read -r _app; do
+      [ -z "$_app" ] && continue
+      COOKIES+="    - name: authelia_${_app}\n"
+      COOKIES+="      domain: ${_app}.${DOMAIN}\n"
+      COOKIES+="      authelia_url: https://auth.${DOMAIN}\n"
+      COOKIES+="      default_redirection_url: https://${_app}.${DOMAIN}\n"
+      COOKIES+="      same_site: lax\n"
+      COOKIES+="      expiration: 1h\n"
+      COOKIES+="      inactivity: 5m\n"
+      COOKIES+="      remember_me: 1M\n"
+    done <<< "$APP_NAMES"
 
-    # 6) Render from template
+    # 4b) Build the access_control domain list YAML block
+    local DOMAINS=""
+    while IFS= read -r _app; do
+      [ -z "$_app" ] && continue
+      DOMAINS+="      - ${_app}.${DOMAIN}\n"
+    done <<< "$APP_NAMES"
+
+    # 5) Render from template, injecting via temp files
     if [ ! -f "$TEMPLATE_PATH" ]; then
         error "Missing template $TEMPLATE_PATH"
         return 1
     fi
     mkdir -p "$(dirname "$OUT_YML")"
+    local _tmp_c _tmp_d
+    _tmp_c="$(mktemp)"; _tmp_d="$(mktemp)"
+    printf '%b' "$COOKIES" >"$_tmp_c"
+    printf '%b' "$DOMAINS" >"$_tmp_d"
     sed \
       -e "s|\${SESSION_SECRET}|${SESSION_SECRET}|g" \
       -e "s|\${STORAGE_KEY}|${STORAGE_KEY}|g" \
       -e "s|\${RESET_JWT}|${RESET_JWT}|g" \
       -e "s|\${LOCAL_DOMAIN}|${DOMAIN}|g" \
       -e "/__COOKIES__/{
-            r /dev/stdin
+            r $_tmp_c
             d
           }" \
       -e "/__ACCESS_RULE_DOMAINS__/{
-            r /dev/stdin
+            r $_tmp_d
             d
           }" \
-      "$TEMPLATE_PATH" \
-      <<<"$COOKIES"$'\n'"$DOMAINS" > "$OUT_YML"
+      "$TEMPLATE_PATH" > "$OUT_YML"
+    rm -f "$_tmp_c" "$_tmp_d"
+
+    [ -z "${COOKIES:-}" ] && error "Cookies list generation is empty; check templates/authelia/apps.yml"
+    [ -z "${DOMAINS:-}" ] && error "Domain list generation is empty; check templates/authelia/apps.yml"
 
     # 7) Permissions
     local UID_ GID_
