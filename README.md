@@ -1,158 +1,157 @@
+```markdown
 # Dev Environment Automation
+A toolkit to bootstrap and operate a secure, documented homelab and AI/ML platform on Docker Compose and Proxmox. Includes per‑app SSO (Authelia), reverse proxy (Caddy), acceptance checks, GPU profiles, and idempotent VM provisioning.
 
-A toolkit to bootstrap and operate a personal AI/ML and homelab environment on Docker Compose. It includes:
+- Private-only access via Tailscale; no public ports
+- Per‑app subdomain + per‑app portal SSO model (deny‑by‑default)
+- Template-driven configs; secrets never committed
+- Acceptance checks and validation commands for safe changes
 
-- Dockerized stacks with templates (reverse proxy, SSO, dashboards, LLM backends, frontends)
-- Proxmox VM provisioning (idempotent, CLI-first)
-- GPU fan control automation (Ansible + systemd)
-- Terminal/CLI environment setup (Fish, Starship, FastFetch, tmux)
-- Documentation (ADR, operations, roadmap)
+## Highlights
+- Utilities stack
+  - Caddy (TLS; local CA), Authelia (SSO), Glance, Watchtower, Redis, Uptime Kuma, Vaultwarden, optional code-server
+  - Per‑app SSO portals: auth.<app>.<domain> → Authelia; <app>.<domain> → forward_auth
+- AI stack (profiles)
+  - Backends: Ollama (OpenAI‑ish), llama.cpp (OpenAI‑compatible /v1)
+  - Frontends/tools: Open WebUI, SillyTavern, ComfyUI, n8n, TTS (OpenAI‑compatible)
+  - Oobabooga UI (SSO) and API (no SSO; supports API key)
+- Proxmox automation
+  - Declarative VMs via YAML; `qm` + cloud‑init; idempotent apply/delete
+- Security posture
+  - Tailscale only; split DNS to Caddy; local TLS with Caddy CA
+  - Strip upstream Authorization at proxy; per‑app cookie scope; Vaultwarden admin guarded
 
-This README replaces the old fish-shell–only README.
+## Architecture (summary)
+- Ingress & Auth: Caddy reverse proxy with local TLS; Authelia for forward_auth
+- Access: Tailscale; split DNS (Pi-hole) for *.lan to utilities VM
+- Workloads:
+  - Utilities VM (Caddy, Authelia, Glance, Watchtower, Redis, Uptime Kuma, Vaultwarden, code-server)
+  - AI VM (Ollama, llama.cpp, Oobabooga, Open WebUI, SillyTavern, n8n, ComfyUI, TTS)
+- DNS/SNI testing patterns to avoid TLS/forward_auth pitfalls
 
----
+(WIP: Add an architecture.png diagram in docs/ and link it here.)
 
-## Features
-
-- Utilities stack:
-  - Caddy reverse proxy (TLS), Glance dashboard, Watchtower, Authelia (SSO), Redis, Uptime Kuma, Vaultwarden, optional code-server
-  - Templated configs generated at deploy time (no secrets committed)
-- AI stack:
-  - Backends: Ollama, llama.cpp (OpenAI-compatible API)
-  - Frontends: Open WebUI, SillyTavern
-  - Pipelines, TTS (OpenAI-compatible), n8n automation, ComfyUI
-  - Profiles select which services run
-- Proxmox automation:
-  - Declarative VMs via YAML, applied idempotently via `qm` + cloud-init
-- Fan control:
-  - Ansible role + systemd unit and scripts for GPU fan control
-- Terminal:
-  - Scripts for Fish/Starship/FastFetch and tmux
-
----
-
-## Repository structure (short)
-
-- docker/
-  - deploy.sh (interactive generator and deployer)
-  - templates/ (ai-compose, Caddy, Authelia, llama.cpp Dockerfile, helpers)
-- docs/
-  - ADR/, MASTER-REF.md, OPERATIONS.md, ROADMAP.md
-- proxmox/
-  - provision.sh, vms.example.yml
-- fan-control/
-  - README, Ansible role, systemd templates
-- terminal/
-  - setup-terminal.sh, setup-tmux.sh
-
----
-
-## Quick start
-
-Prerequisites:
+## Quick Start
+Prereqs
 - Linux host with Docker Engine + Compose plugin
-- NVIDIA driver + NVIDIA Container Toolkit if using GPU
-- python3 (for model helper scripts) if needed
-- Ansible (optional, for fan-control)
-- Proxmox API/SSH access (optional, for provisioning)
+- NVIDIA driver + Container Toolkit for GPU profiles
+- Optional: Ansible (fan control), Proxmox API/SSH access (provisioning)
 
-Steps:
+Steps
 1) Clone
-   - git clone <your-repo-url>
-   - cd dev-environment-automation
-
+   - `git clone https://github.com/0xCcmndhd/dev-environment-automation.git`
+   - `cd dev-environment-automation`
 2) Utilities stack
-   - cd docker
-   - ./deploy.sh
-   - Choose “Utilities”
-   - The script:
-     - Ensures Docker is installed and your user is in the `docker` group (you may need to log out/in)
-     - Creates ~/docker/utilities
-     - Writes a .env interactively (or reuses your existing one)
-     - Generates docker-compose.yml and supporting configs (Caddyfile, Glance, Authelia)
-     - Deploys the stack
-
+   - `cd docker && ./deploy.sh` → choose “Utilities”
+   - Script creates `~/docker/utilities`, writes `.env` interactively, generates Caddyfile/Authelia configs, and deploys
 3) AI stack
-   - cd docker
-   - ./deploy.sh
-   - Choose “AI”
-   - Select COMPOSE_PROFILES (e.g. openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai, or add llamacpp)
-   - The script:
-     - Writes/updates .env (AI paths and options)
-     - Creates ~/docker/ai subdirectories for selected profiles
-     - Generates an AI docker-compose.yml from templates
-     - Optionally copies llama.cpp Dockerfile and helpers if llamacpp profile is selected
-     - Deploys the stack
+   - `cd docker && ./deploy.sh` → choose “AI”
+   - Select `COMPOSE_PROFILES` (e.g., `openwebui,ollama,watchtower,sillytavern,n8n,comfyui,tts-openedai` or add `llamacpp`)
+   - Script creates `~/docker/ai` directories, writes `.env`, generates compose from templates, and deploys
+
+## SSO & Reverse Proxy Model
+- Per‑app portal approach:
+  - `auth.<app>.lan` → Authelia (portal)
+  - `<app>.lan` → Caddy `forward_auth` to Authelia at `/api/authz/forward-auth`
+- Headers:
+  - Copy identity headers from Authelia; strip upstream `Authorization`
+  - Ensure `X-Forwarded-Proto: https` to backends
+- Cookies:
+  - Per‑app cookie scope to avoid cross‑app cookie leakage
+- Known nuance:
+  - HEAD against protected roots can 400; use GET with `-L` in checks
+
+## Acceptance Checks (run these)
+Caddyfile validate:
+```bash
+docker run --rm -v ~/docker/utilities/caddy:/c caddy:latest \
+  caddy validate --config /c/Caddyfile
+```
+
+Authelia validate:
+```bash
+docker run --rm -v ~/docker/utilities/authelia/config:/config authelia/authelia:latest \
+  authelia validate-config --config /config/configuration.yml
+```
+
+Portal SNI test:
+```bash
+curl -kI --resolve auth.glance.lan:443:192.168.120.208 https://auth.glance.lan/
+```
+
+Protected app (GET + follow redirects):
+```bash
+curl -kL -X GET --resolve glance.lan:443:192.168.120.208 https://glance.lan/ -o /dev/null -s -w "%{http_code}\n"
+```
+
+Backend health (bypass Caddy):
+```bash
+curl -sI http://192.168.120.189:7860 | head -n1   # Oobabooga UI
+```
+
+## Profiles: AI Stack (examples)
+| Profile | Service | Notes |
+| --- | --- | --- |
+| openwebui | Open WebUI | Defaults to Ollama; can point to llama.cpp/TTS |
+| ollama | Ollama | OpenAI-ish; `OLLAMA_HOST=0.0.0.0:11434` |
+| llamacpp | llama.cpp | OpenAI-compatible server on port 8000 (/v1) |
+| ooba | Oobabooga | UI (7860) behind SSO; API (5000) can use `--api-key` |
+| n8n | n8n | SSO-protected |
+| comfyui | ComfyUI | SSO-protected |
+| tts-openedai | TTS | OpenAI-compatible endpoint |
+
+llama.cpp defaults (template):
+- Context (16384), `--flash-attn`, cache types q4_1, CPU‑MoE override (`-ot .ffn_.*_exps.=CPU`)
+- Tune via `LLAMACPP_*` in `~/docker/ai/.env` (e.g., `LLAMACPP_MODEL_PATH`, `LLAMACPP_NGL`)
+
+## Security Notes
+- No public exposure; access via Tailscale only
+- Local TLS via Caddy CA; import CA certs on clients for a clean browser experience
+- Strip upstream `Authorization` at proxy to avoid header leakage/loops
+- Vaultwarden:
+  - No SSO; protect `/admin`, enforce `ADMIN_TOKEN`, `SIGNUPS_ALLOWED=false`, 2FA, IP headers, trusted proxies
+
+## Proxmox VM Automation
+- Files: `proxmox/provision.sh`, `proxmox/vms.example.yml`
+- Apply desired state:
+```bash
+./proxmox/provision.sh apply -f proxmox/vms.yml
+```
+- Delete:
+```bash
+./proxmox/provision.sh delete -f proxmox/vms.yml
+```
+- Injects SSH pubkey, uses `qm` + cloud‑init; idempotent
+
+## Troubleshooting
+- If curl works but browser fails: import Caddy’s local CA, clear site data for app and portal hosts
+- If protected routes 400: use `GET` + `-L` and proper SNI with `--resolve`
+- Test backends directly by IP:port to isolate proxy vs app
+- For Oobabooga, ensure `CMD_FLAGS.txt` has only valid flags (no quotes, no bare `--`)
+
+## Repository Structure (short)
+```
+docker/
+  deploy.sh
+  templates/ (ai-compose, Caddy, Authelia, llama.cpp Dockerfile, helpers)
+docs/
+  ADR/, MASTER-REF.md, OPERATIONS.md, ROADMAP.md
+proxmox/
+  provision.sh, vms.example.yml
+fan-control/
+  README.md, Ansible role, systemd templates
+terminal/
+  setup-terminal.sh, setup-tmux.sh
+```
+
+## Roadmap (next up)
+- Proxmox VM automation polish (apply/delete; idempotent)
+- AI/search on backup server: SearXNG + Perplexica (routes + Ollama integration)
+- Media/downloads separation (Jellyfin/Plex + Arr; qBittorrent + NZB)
+- Vaultwarden hardening (admin route, token, trusted proxies, optional allowlist)
+- IAM POC: AVP/Cedar RBAC+ABAC with PEP/PDP, decision logs, OPA comparison
+
+## License
+MIT 
 
 ---
-
-## llama.cpp defaults (in template)
-
-The llama.cpp service (profile: llamacpp) is built from source with CUDA + Flash-Attn and runs:
-
-- -m ${LLAMACPP_MODEL_PATH}
-- -c ${LLAMACPP_CTX_SIZE} (default 16384)
-- -ngl ${LLAMACPP_NGL} (default 80)
-- --flash-attn
-- --cache-type-k q4_1, --cache-type-v q4_1
-- -ot .ffn_.*_exps.=CPU (override-tensor: MoE experts on CPU)
-- threads/batch from .env defaults
-
-These defaults allow CPU-MoE operation (experts on CPU, non-expert/attention on GPU) to keep VRAM use low. Adjust LLAMACPP_* values in .env to tune.
-
-Set LLAMACPP_MODEL_PATH to your GGUF file path. The template defaults to a Qwen3-235B GGUF path.
-
----
-
-## GPT-OSS 120B (MoE) example
-
-To run on a GPU-poor setup with CPU-MoE:
-
-- In ~/docker/ai/.env:
-  - COMPOSE_PROFILES=llamacpp,openwebui,watchtower (or as you like)
-  - LLAMACPP_MODEL_PATH=/models/gpt-oss-120b-mxfp4-00001-of-00003.gguf
-  - LLAMACPP_NGL=999 (offload non-experts)
-  - Keep -ot .ffn_.*_exps.=CPU as provided by the template
-- Deploy the AI stack from docker/deploy.sh
-- Expect ~5–8GB VRAM used with fast prefills; experts run on CPU.
-- If you prefer the newer llama.cpp `--n-cpu-moe` flag, you can add it by editing the command in docker/templates/ai-compose.yml.template (or we can factor it into env in a follow-up change).
-
----
-
-## Open WebUI wiring
-
-- OLLAMA_BASE_URL defaults to http://ollama:11434 if profile enabled
-- OPENAI_API_BASE_URL defaults to http://llamacpp:8000/v1 if profile enabled
-- TTS_URL defaults to http://tts-openedai:8000/v1 if profile enabled
-- Pipelines accessible via PIPELINES_URL
-
----
-
-## Security notes
-
-- No public exposure required; use local DNS/VPN to reach services
-- Authelia is templated; configure secrets at runtime
-- Do not commit local .env files
-
----
-
-## Proxmox VM automation
-
-- See proxmox/provision.sh and proxmox/vms.example.yml
-- Apply: ./proxmox/provision.sh apply -f proxmox/vms.yml
-- Delete: ./proxmox/provision.sh delete -f proxmox/vms.yml
-- Uses SSH to run qm/pvesh on the Proxmox node; idempotent and safe
-
----
-
-## Fan control
-
-- See fan-control/README.md for Ansible role usage and systemd unit templates
-
----
-
-## Terminal and tmux
-
-- terminal/setup-terminal.sh configures Fish/Starship/FastFetch
-- terminal/setup-tmux.sh installs tmux and configures Catppuccin theme and plugins
-
